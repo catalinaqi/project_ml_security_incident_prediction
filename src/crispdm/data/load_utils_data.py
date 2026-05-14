@@ -159,6 +159,7 @@ class ReadStrategyContract:
     mode: ReadMode
     sample_rows: int
     sample_method: str
+    stratify_column: str
     chunksize: int
     random_state: int
 
@@ -220,6 +221,8 @@ class ReadStrategyContract:
         # Step 4: Extract required string field.
         sample_method: str = str(raw["sample_method"])
 
+        stratify_column: str = str(raw["stratify_column"])
+
         # Step 5: Extract required boolean flags.
         # These are the structural difference between Option A and Option B.
         combine_before_sampling: bool = bool(raw["combine_before_sampling"])
@@ -234,12 +237,13 @@ class ReadStrategyContract:
         # Step 7: Log fully resolved values to aid YAML misconfiguration debugging.
         log.info(
             "[ReadStrategyContract.from_dict] resolved — "
-            "mode=%s sample_rows=%d sample_method=%s chunksize=%d "
+            "mode=%s sample_rows=%d sample_method=%s stratify_column=%s chunksize=%d "
             "random_state=%d combine=%s add_source=%s "
             "input_source=%s input_source_sample=%s input_source_full=%s",
             mode.value,
             sample_rows,
             sample_method,
+            stratify_column,
             chunksize,
             random_state,
             combine_before_sampling,
@@ -254,6 +258,7 @@ class ReadStrategyContract:
             mode=mode,
             sample_rows=sample_rows,
             sample_method=sample_method,
+            stratify_column=stratify_column,
             chunksize=chunksize,
             random_state=random_state,
             combine_before_sampling=combine_before_sampling,
@@ -661,6 +666,229 @@ def _load_csv_random_sample(
     )
     return df
 
+
+def _load_csv_stratified_sample(
+        path: str,
+        *,
+        csv_params: Optional[Dict[str, Any]],
+        sample_rows: int,
+        chunksize: int,
+        random_state: int,
+        stratify_column: str,
+) -> pd.DataFrame:
+    """
+    Load a stratified sample from a large CSV without loading the full file.
+
+    Strategy:
+        1. Open a single chunked reader and process the first chunk to get
+           column names and estimate stratum distribution.
+        2. Compute proportional per-stratum targets for the final sample.
+        3. Continue reading remaining chunks, collecting a stratified
+           sub-sample from each, with **early stopping** once we have enough.
+        4. Final down-sample to exactly ``sample_rows`` preserving proportions.
+
+    The pre-scan (step 1) reads only the first ``chunksize`` rows (default 100k)
+    to estimate class frequencies — a fraction of the full 2 GB file.
+    Early stopping (step 3) ensures we never iterate through the entire 13M-row
+    file when we only need 7k or 200k rows.
+
+    Covers: Option A and Option B — called when ``sample_method="stratified"``.
+
+    Parameters
+    ----------
+    path : str
+        Relative or absolute path to the CSV file.
+    csv_params : Optional[Dict[str, Any]]
+        Extra keyword arguments forwarded to ``pd.read_csv()``.
+    sample_rows : int
+        Target number of rows in the returned DataFrame.
+    chunksize : int
+        Number of rows read per chunk iteration.
+    random_state : int
+        Seed for the random sampler — ensures reproducibility.
+    stratify_column : str
+        Name of the column to stratify by (e.g. ``"IncidentGrade"``).
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with approximately ``sample_rows`` rows (or fewer if the
+        file has fewer rows than requested) and preserved class proportions.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the resolved path does not exist.
+    KeyError
+        If ``stratify_column`` is not present in the CSV columns.
+    Exception
+        Any ``pd.read_csv()`` exception is logged then re-raised.
+    """
+    # Step 1: Resolve path and validate existence.
+    resolved = resolve_path(path)
+    params: Dict[str, Any] = dict(csv_params or {})
+    log.debug(
+        "[_load_csv_stratified_sample] resolved path=%s sample_rows=%d "
+        "chunksize=%d random_state=%d stratify_column=%s",
+        resolved,
+        sample_rows,
+        chunksize,
+        random_state,
+        stratify_column,
+    )
+
+    if not resolved.exists():
+        log.error("[_load_csv_stratified_sample] file not found path=%s", resolved)
+        raise FileNotFoundError(f"CSV file not found: {resolved}")
+
+    # Step 2: Open a single chunked reader and get the first chunk for
+    # column discovery and stratum distribution estimation.
+    log.info(
+        "[_load_csv_stratified_sample] opening chunked reader path=%s chunksize=%d",
+        resolved,
+        chunksize,
+    )
+    reader = pd.read_csv(resolved, chunksize=chunksize, **params)
+
+    # Fetch the first chunk manually.
+    try:
+        first_chunk: pd.DataFrame = next(reader)
+    except StopIteration:
+        log.warning("[_load_csv_stratified_sample] CSV file is empty path=%s", resolved)
+        return pd.DataFrame()
+
+    if stratify_column not in first_chunk.columns:
+        log.error(
+            "[_load_csv_stratified_sample] stratify_column='%s' not found in CSV "
+            "columns (first %d). Available columns: %s",
+            stratify_column,
+            chunksize,
+            list(first_chunk.columns),
+        )
+        raise KeyError(
+            f"stratify_column='{stratify_column}' not found in CSV columns. "
+            f"Available: {list(first_chunk.columns)}"
+        )
+
+    # Step 3: Compute per-stratum target counts from the first-chunk
+    # distribution estimate. This is much cheaper than scanning the whole file.
+    stratum_counts: pd.Series = first_chunk[stratify_column].value_counts()
+    total_in_scan: int = len(first_chunk)
+    n_strata: int = len(stratum_counts)
+
+    per_stratum_target: dict[Any, int] = {}
+    for stratum_label, count_in_scan in stratum_counts.items():
+        proportion: float = count_in_scan / total_in_scan
+        target: int = max(1, round(sample_rows * proportion))
+        per_stratum_target[stratum_label] = target
+
+    log.info(
+        "[_load_csv_stratified_sample] pre-scan found %d strata with proportions=%s. "
+        "Per-stratum targets: %s",
+        n_strata,
+        (stratum_counts / total_in_scan).to_dict(),
+        per_stratum_target,
+    )
+
+    # Step 4: Initialise collection state.
+    collected: dict[Any, list[pd.DataFrame]] = {s: [] for s in stratum_counts.index}
+    total_collected: int = 0
+    target_total: int = int(sum(per_stratum_target.values()))
+
+    # Step 5: Collect stratified sample from the first chunk.
+    for stratum_label, group in first_chunk.groupby(stratify_column):
+        n_target: int = per_stratum_target.get(stratum_label, 1)
+        n_take: int = min(len(group), n_target)
+        collected[stratum_label].append(
+            group.sample(n=n_take, random_state=random_state)
+        )
+        total_collected += n_take
+
+    log.debug(
+        "[_load_csv_stratified_sample] after chunk 0: collected=%d / target=%d",
+        total_collected,
+        target_total,
+    )
+
+    # Step 6: Process remaining chunks with early stopping.
+    chunk_index: int = 0
+    for chunk in reader:
+        chunk_index += 1
+
+        for stratum_label, group in chunk.groupby(stratify_column):
+            # How many more rows do we need for this stratum?
+            already: int = sum(
+                len(df_sub) for df_sub in collected.get(stratum_label, [])
+            )
+            still_needed: int = per_stratum_target.get(stratum_label, 1) - already
+
+            if still_needed <= 0:
+                continue  # This stratum is already satisfied.
+
+            n_take = min(len(group), still_needed)
+            collected[stratum_label].append(
+                group.sample(n=n_take, random_state=random_state + chunk_index)
+            )
+            total_collected += n_take
+
+        log.debug(
+            "[_load_csv_stratified_sample] after chunk %d: collected=%d / target=%d",
+            chunk_index,
+            total_collected,
+            target_total,
+        )
+
+        # Early stopping: if all strata are satisfied, stop reading chunks.
+        if total_collected >= target_total:
+            log.info(
+                "[_load_csv_stratified_sample] early stopping at chunk %d "
+                "(collected=%d >= target=%d)",
+                chunk_index,
+                total_collected,
+                target_total,
+            )
+            break
+
+    # Step 7: Concatenate all collected sub-samples.
+    collected_dfs: list[pd.DataFrame] = []
+    for lst in collected.values():
+        collected_dfs.extend(lst)
+
+    if not collected_dfs:
+        log.warning(
+            "[_load_csv_stratified_sample] no rows collected — returning empty DataFrame"
+        )
+        return pd.DataFrame()
+
+    df: pd.DataFrame = pd.concat(collected_dfs, ignore_index=True)
+
+    # Step 8: Final stratified down-sample to exactly sample_rows.
+    if len(df) > sample_rows:
+        log.debug(
+            "[_load_csv_stratified_sample] down-sampling concat rows=%d → target=%d",
+            len(df),
+            sample_rows,
+        )
+        df = (
+            df.groupby(stratify_column, group_keys=False)
+            .apply(
+                lambda x: x.sample(
+                    n=min(len(x), max(1, round(sample_rows * len(x) / len(df)))),
+                    random_state=random_state,
+                )
+            )
+            .reset_index(drop=True)
+        )
+
+    # Step 9: Log final result.
+    log.info(
+        "[_load_csv_stratified_sample] done rows=%d cols=%d path=%s stratum_distribution=%s",
+        len(df),
+        df.shape[1],
+        resolved,
+        df[stratify_column].value_counts().to_dict(),
+    )
+    return df
 
 def _load_csv_chunks(
         path: str,
@@ -1170,6 +1398,15 @@ def load_by_strategy(
         strategy.chunksize,
     )
 
+    if strategy.mode == ReadMode.SAMPLE and strategy.sample_method == "stratified":
+        df = _load_csv_stratified_sample(
+            path, csv_params=csv_params,
+            sample_rows=strategy.sample_rows,
+            chunksize=strategy.chunksize,
+            random_state=strategy.random_state,
+            stratify_column=strategy.stratify_column,
+        )
+        return df, None, strategy
     # Step 1: Dispatch to random sample primitive.
     if strategy.mode == ReadMode.SAMPLE and strategy.sample_method == "random":
         log.info("[load_by_strategy] -> _load_csv_random_sample")

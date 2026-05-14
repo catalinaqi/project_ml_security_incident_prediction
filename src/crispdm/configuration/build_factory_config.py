@@ -136,6 +136,104 @@ class ConfigBuilder:
         log.debug("Dataset defaults applied successfully")
 
     @staticmethod
+    def _apply_profile_to_read_strategy(pipeline_cfg: DictConfig) -> None:
+        """
+        Inject ``mode`` and ``sample_rows`` from the active profile into Phase 2's
+        ``read_strategy`` block.
+
+        The base pipeline YAML defines ``read_strategy`` WITHOUT ``mode`` and
+        ``sample_rows`` -- those values live only in the profile definitions
+        (e.g. ``profiles.dev.mode="sample"``, ``profiles.dev.sample_rows=50000``).
+
+        ``ReadStrategyContract.from_dict()`` requires both fields (raises
+        ``KeyError`` otherwise). This method bridges the gap by copying them
+        from the active profile into ``phase2_data_understanding.read_strategy``
+        **only if they are missing or empty**, so the profile serves as the
+        default but inline overrides are respected.
+
+        Called from ``build_pipeline_config()`` after ``_apply_dataset_defaults()``
+        and before ``_validate_config_structure()``.
+
+        Parameters
+        ----------
+        pipeline_cfg : DictConfig
+            Merged pipeline configuration (base + specific) with profiles
+            already loaded.
+        """
+        # Step 1: CALL YmlRepository.get_active_profile -- read active profile name
+        active_profile: str = YmlRepository.get_active_profile()
+
+        # Step 2: Guard -- profile must exist in pipeline configuration.
+        if active_profile not in pipeline_cfg.profiles:
+            log.warning(
+                "[_apply_profile_to_read_strategy] active profile '%s' not found "
+                "in pipeline config -- skipping read_strategy injection",
+                active_profile,
+            )
+            return
+
+        # Step 3: Guard -- Phase 2 must be present.
+        if "phase2_data_understanding" not in pipeline_cfg.phases:
+            log.debug(
+                "[_apply_profile_to_read_strategy] phase2_data_understanding not "
+                "present -- skipping profile injection",
+            )
+            return
+
+        profile = pipeline_cfg.profiles[active_profile]
+
+        # Step 4: Guard -- Phase 2 must have a read_strategy block.
+        phase2 = pipeline_cfg.phases.phase2_data_understanding
+        if "read_strategy" not in phase2:
+            log.debug(
+                "[_apply_profile_to_read_strategy] phase2 has no read_strategy "
+                "block -- creating empty one",
+            )
+            phase2.read_strategy = {}
+
+        read_strategy = phase2.read_strategy
+
+        # Step 5: Inject mode -- only if missing or empty.
+        if not read_strategy.get("mode"):
+            read_strategy.mode = profile.mode
+            log.debug(
+                "[_apply_profile_to_read_strategy] injected mode='%s' "
+                "from profile '%s'",
+                profile.mode,
+                active_profile,
+            )
+        else:
+            log.debug(
+                "[_apply_profile_to_read_strategy] mode already set to '%s' "
+                "-- keeping inline value",
+                read_strategy.mode,
+            )
+
+        # Step 6: Inject sample_rows -- only if missing or empty.
+        if not read_strategy.get("sample_rows"):
+            read_strategy.sample_rows = profile.sample_rows
+            log.debug(
+                "[_apply_profile_to_read_strategy] injected sample_rows=%d "
+                "from profile '%s'",
+                profile.sample_rows,
+                active_profile,
+            )
+        else:
+            log.debug(
+                "[_apply_profile_to_read_strategy] sample_rows already set to %d "
+                "-- keeping inline value",
+                read_strategy.sample_rows,
+            )
+
+        log.info(
+            "[_apply_profile_to_read_strategy] done -- mode=%s sample_rows=%d "
+            "from profile='%s'",
+            read_strategy.mode,
+            read_strategy.sample_rows,
+            active_profile,
+        )
+
+    @staticmethod
     def _validate_config_structure(pipeline_cfg: DictConfig) -> None:
 
         log.debug("Validating config structure with Pydantic DTO")

@@ -211,6 +211,26 @@ class StageSubDir(str, Enum):
     METRICS = "metrics"
 
 
+class StepOutputArtifact(str, Enum):
+    """Keys for output_artifacts in Phase 2 steps YAML configuration."""
+    # Step 2.1
+    SAMPLE_TRAIN_PARQUET = "sample_train_parquet"
+    SAMPLE_TEST_PARQUET = "sample_test_parquet"
+    SAMPLE_STATS = "sample_stats"
+    HIERARCHY_REPORT = "hierarchy_report"
+
+    # Step 2.2
+    SCHEMA_SUMMARY = "schema_summary"
+    STATISTICS_SUMMARY = "statistics_summary"
+
+    # Step 2.3
+    QUALITY_SUMMARY = "quality_summary"
+    CRITICAL_ISSUES = "critical_issues"
+
+    # Step 2.4
+    EXPLORATORY_SUMMARY = "exploratory_summary"
+    PHASE2_REPORT = "phase2_report"
+
 class StepsPhase(str, Enum):  # noqa: D101
     STEP_2_1 = "step_2_1_data_acquisition"
     STEP_2_2 = "step_2_2_data_description"

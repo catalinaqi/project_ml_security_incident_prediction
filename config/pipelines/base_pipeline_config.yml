@@ -27,7 +27,7 @@ pipeline_base:
       enabled: true
       description: "Fast iteration mode with smaller samples for development"
       mode: "sample"
-      sample_rows: 50000
+      sample_rows: 7000 #50000
       stratify_column: "IncidentGrade"
     prod:
       enabled: false

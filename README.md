@@ -43,8 +43,8 @@ Project_DS_Microsoft_Security_Incident_Prediction/
 ├── src/
 │   └── crispdm/                                   # Core framework package
 │       ├── api/                                   # ← Facade layer (only public interface)
-│       ├── config/                                # ← Config subsystem: Load → DTO → Validate → Build
-│       ├── core/                                  # ← Cross-cutting utilities
+│       ├── configuration/                         # ← Config subsystem: Load → DTO → Validate → Build
+│       ├── common/                                # ← Cross-cutting utilities
 │       ├── data/                                  # ← Data ingestion & quality
 │       ├── feature/                               # ← Feature engineering & splitting
 │       ├── model/                                 # ← Training, evaluation & registry
@@ -67,13 +67,13 @@ Single public interface for all notebooks. Hides all internal complexity.
 
 ---
 
-### `config/` — Configuration Subsystem
+### `configuration/` — Configuration Subsystem
 
 Implements a deterministic 4-step pipeline: **Load → Resolve → Validate → Build**.
 
 ---
 
-### `core/` — Cross-Cutting Utilities
+### `common/` — Cross-Cutting Utilities
 
 Stateless helpers with no business logic, usable from any layer.
 

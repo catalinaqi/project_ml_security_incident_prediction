@@ -22,7 +22,7 @@ from typing import Any, Mapping, TypeVar, cast, overload
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 2 – Third-party imports
 # ──────────────────────────────────────────────────────────────────────────────
-# (none required – )
+from omegaconf import OmegaConf, DictConfig, ListConfig
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 3 – Internal imports
@@ -151,6 +151,28 @@ def dget(
     # Step 3: Cast convinces mypy the value matches the _T of `default`.
     return cast(_T, v)
 
+
+def ensure_native_types(value: Any) -> Any:
+    """
+    Recursively convert OmegaConf containers (DictConfig, ListConfig)
+    to native Python types (dict, list).
+
+    Pass-through for already-native types (str, int, float, bool, None,
+    list, dict, etc.). Useful when passing config values to external
+    libraries (pandas, numpy, sklearn) that do not accept OmegaConf types.
+
+    Args:
+        value: Arbitrary value, possibly containing OmegaConf containers.
+
+    Returns:
+        Python-native representation with all OmegaConf containers resolved.
+    """
+    if isinstance(value, DictConfig):
+        return OmegaConf.to_container(value, resolve=True)
+    if isinstance(value, ListConfig):
+        return OmegaConf.to_container(value, resolve=True)
+    # All other types (including native dict/list) pass through unchanged.
+    return value
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 7 — Private functions

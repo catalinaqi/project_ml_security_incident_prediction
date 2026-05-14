@@ -72,22 +72,67 @@ def describe_table(
     return desc.reset_index(drop=True)
 
 
-def min_max_mean_std(df: pd.DataFrame, *, numeric_only: bool = True) -> pd.DataFrame:
-    """Compute min, max, mean, std for each column."""
+def min_max_mean_std(
+        df: pd.DataFrame,
+        *,
+        numeric_only: bool = True,
+        exclude_bigint_hashed: bool = False,
+        metrics: list[str] | None = None,
+) -> pd.DataFrame:
+    """Compute descriptive statistics for each column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    numeric_only : bool
+        If True, only process numeric columns.
+    exclude_bigint_hashed : bool
+        If True, skip BIGINT columns with high cardinality (pseudo-categorical).
+    metrics : list[str] | None
+        If provided, only compute the specified metrics.
+        Valid values: "count", "min", "max", "mean", "std".
+        If None, computes all: min, max, mean, std.
+    """
     cols = numeric_cols(df) if numeric_only else list(df.columns)
+
+    # Filter out BIGINT pseudo-categorical columns if requested
+    if exclude_bigint_hashed:
+        filtered_cols = []
+        for c in cols:
+            n_unique = int(df[c].nunique(dropna=True))
+            if n_unique > 1000:  # heuristic: high-cardinality integer → skip
+                log.debug("[min_max_mean_std] excluding bigint-pseudo column: %s", c)
+                continue
+            filtered_cols.append(c)
+        cols = filtered_cols
+
     rows = []
     for c in cols:
         s = pd.to_numeric(df[c], errors="coerce")
         has_data = bool(s.notna().any())
-        rows.append(
-            {
-                "column": c,
-                "min": float(s.min()) if has_data else None,
-                "max": float(s.max()) if has_data else None,
-                "mean": float(s.mean()) if has_data else None,
-                "std": float(s.std()) if has_data else None,
-            }
-        )
+        row: dict[str, Any] = {"column": c}
+
+        if metrics is not None:
+            # Only compute requested metrics
+            if "count" in metrics:
+                row["count"] = int(s.notna().sum()) if has_data else 0
+            if "min" in metrics:
+                row["min"] = float(s.min()) if has_data else None
+            if "max" in metrics:
+                row["max"] = float(s.max()) if has_data else None
+            if "mean" in metrics:
+                row["mean"] = float(s.mean()) if has_data else None
+            if "std" in metrics:
+                row["std"] = float(s.std()) if has_data else None
+        else:
+            # Default: all classic metrics
+            row["min"] = float(s.min()) if has_data else None
+            row["max"] = float(s.max()) if has_data else None
+            row["mean"] = float(s.mean()) if has_data else None
+            row["std"] = float(s.std()) if has_data else None
+
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -306,10 +351,25 @@ def column_metadata_report(
         df: pd.DataFrame,
         *,
         include_cardinality: bool = True,
+        include_dtypes: bool = True,
         cardinality_threshold: int = 1000,
         detect_bigint_pseudo_categorical: bool = True,
 ) -> pd.DataFrame:
-    """Generate column metadata with cardinality classification."""
+    """Generate column metadata with cardinality classification.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    include_cardinality : bool
+        Whether to classify cardinality as low/medium/high.
+    include_dtypes : bool
+        Whether to include detailed dtype string in the output.
+    cardinality_threshold : int
+        Threshold distinguishing medium from high cardinality.
+    detect_bigint_pseudo_categorical : bool
+        Whether to flag BIGINT columns that may be pseudo-categorical.
+    """
     rows = []
     for col in df.columns:
         n_unique = int(df[col].nunique(dropna=True))
@@ -331,15 +391,18 @@ def column_metadata_report(
         if detect_bigint_pseudo_categorical and dtype_str.startswith("int") and n_unique > cardinality_threshold:
             is_bigint_pseudo = True
 
-        rows.append(
-            {
-                "column": col,
-                "dtype": dtype_str,
-                "n_unique": n_unique,
-                "cardinality_class": cardinality_class,
-                "is_bigint_pseudo_categorical": is_bigint_pseudo,
-            }
-        )
+        row = {
+            "column": col,
+            "n_unique": n_unique,
+            "cardinality_class": cardinality_class,
+            "is_bigint_pseudo_categorical": is_bigint_pseudo,
+        }
+
+        # Step 3: Include dtype info only if requested
+        if include_dtypes:
+            row["dtype"] = dtype_str
+
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -350,14 +413,37 @@ def schema_comparison_report(
         *,
         check_column_names: bool = True,
         check_dtypes: bool = True,
+        check_column_order: bool = False,
         strict_mode: bool = False,
+        report_missing_in_train: bool = True,
+        report_missing_in_test: bool = True,
 ) -> dict[str, Any]:
-    """Compare schemas between train and test."""
+    """Compare schemas between train and test.
+
+    Parameters
+    ----------
+    df_train : pd.DataFrame
+        Training DataFrame.
+    df_test : pd.DataFrame
+        Test/validation DataFrame.
+    check_column_names : bool
+        Whether to compare column name sets.
+    check_dtypes : bool
+        Whether to compare dtypes for common columns.
+    check_column_order : bool
+        Whether to verify exact column order match.
+    strict_mode : bool
+        If True, treat missing_in_train as incompatibility.
+    report_missing_in_train : bool
+        Whether to include missing_in_train list in output.
+    report_missing_in_test : bool
+        Whether to include missing_in_test list in output.
+    """
     # Step 1: Column name comparison
     train_cols = set(df_train.columns)
     test_cols = set(df_test.columns)
-    missing_in_test = sorted(train_cols - test_cols)
-    missing_in_train = sorted(test_cols - train_cols)
+    missing_in_test = sorted(train_cols - test_cols) if check_column_names else []
+    missing_in_train = sorted(test_cols - train_cols) if check_column_names else []
 
     # Step 2: Dtype comparison
     dtype_mismatches = []
@@ -373,18 +459,29 @@ def schema_comparison_report(
                     }
                 )
 
-    # Step 3: Build report
-    is_compatible = len(missing_in_test) == 0 and len(dtype_mismatches) == 0
+    # Step 3: Check column order
+    column_order_match = True
+    if check_column_order:
+        column_order_match = list(df_train.columns) == list(df_test.columns)
+
+    # Step 4: Build report
+    is_compatible = len(missing_in_test) == 0 and len(dtype_mismatches) == 0 and column_order_match
     if strict_mode:
         is_compatible = is_compatible and len(missing_in_train) == 0
 
-    log.debug("[schema_comparison] compatible=%s missing_in_test=%d", is_compatible, len(missing_in_test))
-    return {
+    report: dict[str, Any] = {
         "is_compatible": is_compatible,
-        "missing_in_test": missing_in_test,
-        "missing_in_train": missing_in_train,
         "dtype_mismatches": dtype_mismatches,
+        "column_order_match": column_order_match if check_column_order else None,
     }
+
+    if report_missing_in_test:
+        report["missing_in_test"] = missing_in_test
+    if report_missing_in_train:
+        report["missing_in_train"] = missing_in_train
+
+    log.debug("[schema_comparison] compatible=%s missing_in_test=%d", is_compatible, len(missing_in_test))
+    return report
 
 
 def multi_value_parser(
@@ -464,8 +561,23 @@ def target_distribution_report(
         target_column: str,
         detect_none_values: bool = True,
         compute_imbalance_ratio: bool = True,
+        report_value_counts: bool = True,
 ) -> dict[str, Any]:
-    """Analyze target distribution with 'None' detection."""
+    """Analyze target distribution with 'None' detection.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    target_column : str
+        Name of the target column.
+    detect_none_values : bool
+        Whether to detect 'None' string values.
+    compute_imbalance_ratio : bool
+        Whether to compute the imbalance ratio.
+    report_value_counts : bool
+        Whether to include value counts in the output dictionary.
+    """
     if target_column not in df.columns:
         return {}
 
@@ -492,13 +604,17 @@ def target_distribution_report(
         none_count,
     )
 
-    return {
+    report: dict[str, Any] = {
         "target_column": target_column,
-        "value_counts": value_counts.to_dict(),
         "has_none_string": has_none_string,
         "none_count": none_count,
         "imbalance_ratio": imbalance_ratio,
     }
+
+    if report_value_counts:
+        report["value_counts"] = value_counts.to_dict()
+
+    return report
 
 
 def detect_id_columns(
@@ -712,14 +828,40 @@ def timestamp_range_validator(
 
 
 def column_catalog_by_roles(
-        df: pd.DataFrame, *, roles: dict[str, list[str]], include_created_in_phase_2: bool = False
+        df: pd.DataFrame,
+        *,
+        roles: dict[str, list[str]],
+        include_created_in_phase_2: bool = False,
+        categorize_by_role: bool = True,
 ) -> dict[str, Any]:
-    """Categorize columns by their analytical role."""
+    """Categorize columns by their analytical role.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    roles : dict[str, list[str]]
+        Dictionary mapping role names to lists of column names.
+    include_created_in_phase_2 : bool
+        Whether to include columns created in Phase 2 (not yet available).
+    categorize_by_role : bool
+        If True, includes an 'uncategorized' list for columns not matched
+        to any defined role.
+    """
     catalog = {}
 
     for role_name, col_list in roles.items():
         present_cols = [c for c in col_list if c in df.columns]
         catalog[role_name] = present_cols
+
+    # Report uncategorized columns if requested
+    if categorize_by_role:
+        all_categorized: set[str] = set()
+        for col_list in roles.values():
+            all_categorized.update(col_list)
+        uncategorized = [c for c in df.columns if c not in all_categorized]
+        catalog["uncategorized"] = uncategorized
+        log.debug("[column_catalog_by_roles] uncategorized=%d", len(uncategorized))
 
     log.debug("[column_catalog_by_roles] roles=%d", len(catalog))
     return catalog

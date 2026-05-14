@@ -14,6 +14,11 @@ from crispdm.pipeline.clustering_runner_pipeline import (
     create_clustering_context,
     run_clustering_pipeline_phase2_1,
 )
+from crispdm.phase.phase2_understanding_runner_stage import (
+    run_data_description,
+    run_data_quality_verification,
+    run_exploratory_analysis,
+)
 
 log = get_logger(__name__)
 
@@ -126,6 +131,12 @@ def run_phase2_1(ctx: RunContext) -> RunContext:
 def run_phase2_2(ctx: RunContext) -> RunContext:
     """Run Phase 2.2 - Data Description."""
     log.info("Running phase2.2: run_id=%s", ctx.run_id)
+    log.info(
+        "[run_phase2_2] start task=%s run_id=%s",
+        ctx.task,
+        ctx.run_id,
+    )
+    ctx = _dispatch_pipeline_phase2_2(ctx)
     log.info("Phase2.2 complete")
     return ctx
 
@@ -133,6 +144,13 @@ def run_phase2_2(ctx: RunContext) -> RunContext:
 def run_phase2_3(ctx: RunContext) -> RunContext:
     """Run Phase 2.3 - Data Quality Assessment."""
     log.info("Running phase2.3: run_id=%s", ctx.run_id)
+    log.info(
+        "[run_phase2_3] start task=%s run_id=%s",
+        ctx.task,
+        ctx.run_id,
+    )
+    ctx = _dispatch_pipeline_phase2_3(ctx)
+
     log.info("Phase2.3 complete")
     return ctx
 
@@ -140,6 +158,14 @@ def run_phase2_3(ctx: RunContext) -> RunContext:
 def run_phase2_4(ctx: RunContext) -> RunContext:
     """Run Phase 2.4 - Exploratory Analysis."""
     log.info("Running phase2.4: run_id=%s", ctx.run_id)
+
+    log.info(
+        "[run_phase2_4] start task=%s run_id=%s",
+        ctx.task,
+        ctx.run_id,
+    )
+    ctx = _dispatch_pipeline_phase2_4(ctx)
+
     log.info("Phase2.4 complete")
     return ctx
 
@@ -179,5 +205,111 @@ def _dispatch_pipeline_phase2_1(ctx: RunContext) -> RunContext:
 
     raise NotImplementedError(
         f"[_dispatch_pipeline_phase2_1] task={ctx.task!r} pipeline not yet implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+def _dispatch_pipeline_phase2_2(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 2.2 to the correct pipeline runner by ``ctx.task``.
+
+    REUSES the *same* ``ctx`` (already populated by Phase 2.1) — does NOT
+    create a new empty context.  The downstream runners (e.g. ``run_data_description``)
+    accept a plain ``RunContext``, so no ClusteringRunContext wrapper is needed.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata.  Must already have
+        ``df_train`` and ``df_test`` set by Phase 2.1.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 2.2.
+
+    Raises
+    ------
+    RuntimeError
+        If ``ctx.df_train`` is ``None`` (Phase 2.1 not run first).
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    if ctx.task == ProblemType.CLUSTERING.value:
+        if ctx.df_train is None:
+            raise RuntimeError("[2.2] no data loaded - run Phase 2.1 first")
+        return run_data_description(ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase2_2] task={ctx.task!r} pipeline not yet "
+        f"implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+def _dispatch_pipeline_phase2_3(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 2.3 to the correct pipeline runner by ``ctx.task``.
+
+    REUSES the *same* ``ctx`` (already populated by Phase 2.1) — does NOT
+    create a new empty context.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata.  Must already have
+        ``df_train`` and ``df_test`` set by Phase 2.1.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 2.3.
+
+    Raises
+    ------
+    RuntimeError
+        If ``ctx.df_train`` is ``None`` (Phase 2.1 not run first).
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    if ctx.task == ProblemType.CLUSTERING.value:
+        if ctx.df_train is None:
+            raise RuntimeError("[2.3] no data loaded - run Phase 2.1 first")
+        return run_data_quality_verification(ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase2_3] task={ctx.task!r} pipeline not yet "
+        f"implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+def _dispatch_pipeline_phase2_4(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 2.4 to the correct pipeline runner by ``ctx.task``.
+
+    REUSES the *same* ``ctx`` (already populated by Phase 2.1) — does NOT
+    create a new empty context.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata.  Must already have
+        ``df_train`` and ``df_test`` set by Phase 2.1.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 2.4.
+
+    Raises
+    ------
+    RuntimeError
+        If ``ctx.df_train`` is ``None`` (Phase 2.1 not run first).
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    if ctx.task == ProblemType.CLUSTERING.value:
+        if ctx.df_train is None:
+            raise RuntimeError("[2.4] no data loaded - run Phase 2.1 first")
+        return run_exploratory_analysis(ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase2_4] task={ctx.task!r} pipeline not yet "
+        f"implemented. "
         f"Valid tasks: {[m.value for m in ProblemType]}"
     )

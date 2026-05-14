@@ -90,7 +90,19 @@ class YmlRepository:
             merged.phases.update(base_cfg.pipeline_base.common_phases_config.phases)
 
         if "phases" in pipeline_data:
-            merged.phases.update(pipeline_data.phases)
+            # Deep-merge each phase from the specific config into the base phases.
+            # This ensures that partial overrides (e.g. phase2_data_understanding: {enabled: true})
+            # do NOT wipe out the full config from base — only the keys explicitly provided
+            # in the specific pipeline config are overwritten.
+            for phase_key, phase_cfg in pipeline_data.phases.items():
+                if phase_key in merged.phases:
+                    # Phase exists in base → deep merge (specific overrides take precedence)
+                    merged.phases[phase_key] = OmegaConf.merge(
+                        merged.phases[phase_key], phase_cfg
+                    )
+                else:
+                    # Phase only in specific → add as-is
+                    merged.phases[phase_key] = phase_cfg
 
         if "runtime" in pipeline_data:
             merged.common_base_config.runtime.update(pipeline_data.runtime)
