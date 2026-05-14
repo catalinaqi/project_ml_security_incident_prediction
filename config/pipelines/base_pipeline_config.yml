@@ -1,0 +1,341 @@
+pipeline_base:
+  metadata:
+    project: "Microsoft Security Incident Prediction"
+    purpose: "Base configuration for PHASE 2 - inherited by all model pipelines"
+    methodology: "CRISP-DM"
+    version: "1.0.2"
+    date: "2025-05-12"
+    notes: "Lightweight profiling with ALL critical validations - no heavy computation"
+
+  common_base_config:
+    methodology: "CRISP-DM"
+    version: "1.0.2"
+    runtime:
+      random_seed: 7
+      output_root: "outputs"
+      overwrite_artifacts: true
+      log_level: "DEGUB"
+    output_policy:
+      save_all_as_png: true
+      save_all_tables_as_png: true
+      dpi: 150
+      format: "parquet"
+      compression: "snappy"
+
+  profiles:
+    dev:
+      enabled: true
+      description: "Fast iteration mode with smaller samples for development"
+      mode: "sample"
+      sample_rows: 50000
+      stratify_column: "IncidentGrade"
+    prod:
+      enabled: false
+      description: "Full-scale execution with larger samples for production analysis"
+      mode: "sample"
+      sample_rows: 200000
+      stratify_column: "IncidentGrade"
+
+  common_phases_config:
+    phases:
+      #"Describe, DON'T transform. Alert, DON'T correct."
+      #"Describe, DO NOT transform. Alert, DO NOT remediate."
+      phase2_data_understanding:
+        enabled: true
+        objective: "Lightweight profiling with critical validations - no heavy computation"
+        design_principle: "Profile → Detect → Flag → Report (NO transformations)"
+        dataset_input:
+          source_type: "local"
+          train_path: "${train_dataset_path}"
+          test_path: "${test_dataset_path}"
+        read_strategy:
+          sample_method: "stratified"
+          stratify_column: "IncidentGrade"
+          random_state: 7
+          chunksize: 100000
+          add_source_column: true
+          combine_before_sampling: false
+          dtype_optimization: true
+
+        steps:
+          step_2_1_data_acquisition:
+            enabled: true
+            description: "Load and sample train/test data with hierarchy profiling"
+            methods:
+              data_acquisition:
+                enabled: true
+                techniques:
+                  load_csv_train:
+                    enabled: true
+                    params:
+                      infer_datetime: true
+                      parse_dates: ["Timestamp"]
+                      low_memory: false
+                    output: "2.1.data_acquisition.load_csv_train.json"
+                  load_csv_test:
+                    enabled: true
+                    params:
+                      infer_datetime: true
+                      parse_dates: ["Timestamp"]
+                      low_memory: false
+                    output: "2.1.data_acquisition.load_csv_test.json"
+                  hierarchy_profiling:
+                    enabled: true
+                    description: "Analyze Evidence→Alert→Incident hierarchy and ratios"
+                    params:
+                      hierarchy_levels: ["Id", "AlertId", "IncidentId"]
+                      compute_ratios: true
+                      expected_ratios:
+                        evidences_per_incident: 20.4
+                        alerts_per_incident: 2.7
+                    output: "2.1.data_acquisition.hierarchy_profiling.json"
+            output_artifacts:
+              sample_train_parquet: "2.1.data_acquisition.sample_train.parquet"
+              sample_test_parquet: "2.1.data_acquisition.sample_test.parquet"
+              sample_stats: "2.1.data_acquisition.stats_comparison.json"
+              hierarchy_report: "2.1.data_acquisition.hierarchy_report.json"
+
+          step_2_2_data_description:
+            enabled: true
+            description: "Schema analysis and basic statistics without heavy computation"
+            methods:
+              schema_analysis:
+                enabled: true
+                techniques:
+                  column_metadata:
+                    enabled: true
+                    params:
+                      include_cardinality: true
+                      include_dtypes: true
+                      cardinality_threshold: 1000
+                      detect_bigint_pseudo_categorical: true
+                    output: "2.2.schema_analysis.column_metadata.json"
+                  schema_comparison:
+                    enabled: true
+                    params:
+                      check_column_names: true
+                      check_dtypes: true
+                      check_column_order: false
+                      strict_mode: false
+                      report_missing_in_train: true
+                      report_missing_in_test: true
+                    output: "2.2.schema_analysis.schema_comparison.json"
+              descriptive_statistics:
+                enabled: true
+                description: "Lightweight statistics - count, mean, std, min, max only"
+                techniques:
+                  basic_stats:
+                    enabled: true
+                    params:
+                      numeric_only: true
+                      exclude_bigint_hashed: true
+                      metrics: ["count", "mean", "std", "min", "max"]
+                    output: "2.2.descriptive_statistics.basic_stats.json"
+              categorical_analysis:
+                enabled: true
+                techniques:
+                  multi_value_parsing:
+                    enabled: true
+                    description: "Parse comma-separated values in MitreTechniques and Roles"
+                    params:
+                      columns: ["MitreTechniques", "Roles"]
+                      delimiter: ","
+                      max_values_per_row: 10
+                      min_frequency: 0.001
+                      report_top_n: 20
+                    output: "2.2.categorical_analysis.multi_value_parsing.json"
+                  cardinality_profiling:
+                    enabled: true
+                    description: "Classify columns by cardinality and identify BIGINT pseudo-categoricals"
+                    params:
+                      target_columns:
+                        low_cardinality: ["IncidentGrade", "Category", "EntityType", "EvidenceRole", "SuspicionLevel", "LastVerdict", "OSFamily", "AntispamDirection", "ResourceType"]
+                        medium_cardinality: ["ThreatFamily", "DetectorId", "OrgId"]
+                        high_cardinality_bigint: ["AlertTitle", "IpAddress", "Sha256", "FileName", "AccountUpn", "AccountSid", "AccountObjectId", "DeviceId", "NetworkMessageId", "EmailClusterId", "RegistryKey", "ApplicationId"]
+                      report_top_n: 20
+                      flag_if_cardinality_exceeds: 10000
+                    output: "2.2.categorical_analysis.cardinality_profiling.json"
+                  target_distribution:
+                    enabled: true
+                    description: "Analyze IncidentGrade distribution and detect 'None' values"
+                    params:
+                      target_column: "IncidentGrade"
+                      detect_none_values: true
+                      compute_imbalance_ratio: true
+                      report_value_counts: true
+                    output: "2.2.categorical_analysis.target_distribution.json"
+              special_feature_detection:
+                enabled: true
+                techniques:
+                  id_column_detection:
+                    enabled: true
+                    description: "Detect identifier columns (uniqueness >95%)"
+                    params:
+                      id_patterns: ["*Id", "AccountSid", "AccountObjectId", "NetworkMessageId"]
+                      uniqueness_min: 0.95
+                    output: "2.2.special_feature_detection.id_columns.json"
+                  entity_conditional_sparsity:
+                    enabled: true
+                    description: "Detect EntityType-dependent NULL patterns (Device*, Account*, etc.)"
+                    params:
+                      entity_column: "EntityType"
+                      conditional_columns:
+                        Device: ["DeviceId", "DeviceName", "OSFamily", "OSVersion"]
+                        User: ["AccountUpn", "AccountName", "AccountSid", "AccountObjectId", "Roles"]
+                        Ip: ["IpAddress", "CountryCode", "State", "City"]
+                        MailMessage: ["NetworkMessageId", "EmailClusterId", "AntispamDirection"]
+                        File: ["FileName", "FolderPath", "Sha256"]
+                        Process: ["FileName", "FolderPath"]
+                        RegistryKey: ["RegistryKey", "RegistryValueName", "RegistryValueData"]
+                        CloudApplication: ["ApplicationId", "ApplicationName", "OAuthApplicationId"]
+                        CloudResource: ["ResourceIdName", "ResourceType"]
+                      report_null_percentages: true
+                    output: "2.2.special_feature_detection.entity_conditional_sparsity.json"
+            output_artifacts:
+              schema_summary: "2.2.schema_summary.json"
+              statistics_summary: "2.2.statistics_summary.json"
+
+          step_2_3_data_quality_assessment:
+            enabled: true
+            description: "Quality checks with leakage detection - no expensive computations"
+            methods:
+              missing_data_profiling:
+                enabled: true
+                techniques:
+                  completeness_report:
+                    enabled: true
+                    params:
+                      include_patterns: true
+                      show_top_columns: 50
+                      distinguish_null_by_design: true
+                    output: "2.3.missing_data_profiling.completeness_report.json"
+              structural_integrity:
+                enabled: true
+                techniques:
+                  duplicate_detection:
+                    enabled: true
+                    description: "Detect duplicates at Evidence level (Id column)"
+                    params:
+                      subset: ["Id"]
+                      keep: "first"
+                    output: "2.3.structural_integrity.duplicate_detection.json"
+                  sentinel_detection:
+                    enabled: true
+                    params:
+                      sentinel_values: [-1, 0, 999, 9999]
+                      check_columns: ["CountryCode", "OSVersion"]
+                    output: "2.3.structural_integrity.sentinel_detection.json"
+              potential_leakage_detection:
+                enabled: true
+                description: "Flag features with suspiciously high correlation to target (>0.95)"
+                techniques:
+                  crosstab_analysis:
+                    enabled: true
+                    params:
+                      target_column: "IncidentGrade"
+                      suspect_columns: ["ThreatFamily", "LastVerdict", "SuspicionLevel", "ActionGrouped"]
+                      normalize: "index"
+                      leakage_threshold: 0.95
+                    output: "2.3.potential_leakage_detection.crosstab_analysis.json"
+                  post_triage_detection:
+                    enabled: true
+                    description: "Detect features likely generated after incident triage"
+                    params:
+                      high_missingness_threshold: 0.9
+                      suspect_columns: ["ActionGrouped", "ActionGranular"]
+                    output: "2.3.potential_leakage_detection.post_triage_detection.json"
+              temporal_integrity:
+                enabled: true
+                techniques:
+                  timestamp_range:
+                    enabled: true
+                    description: "Verify observation window is 14 days"
+                    params:
+                      timestamp_column: "Timestamp"
+                      expected_min_days: 14
+                      detect_timezone_issues: true
+                    output: "2.3.temporal_integrity.timestamp_range.json"
+              statistical_health:
+                enabled: true
+                techniques:
+                  data_drift:
+                    enabled: true
+                    params:
+                      compare_datasets: true
+                      columns: [ "Category", "SuspicionLevel", "DetectorId" ]
+                    output: "2.3.statistical_health.data_drift.json"
+            output_artifacts:
+              quality_summary: "2.3.data_quality_assessment.quality_summary.json"
+              critical_issues: "2.3.data_quality_assessment.critical_issues.json"
+
+          step_2_4_data_exploration:
+            enabled: true
+            description: "Lightweight visual exploration - no heavy correlation matrices"
+            methods:
+              feature_inventory:
+                enabled: true
+                techniques:
+                  column_catalog:
+                    enabled: true
+                    params:
+                      include_created_in_phase_2: false
+                      categorize_by_role: true
+                      roles:
+                        identifiers: ["Id", "AlertId", "IncidentId"]
+                        targets: ["IncidentGrade"]
+                        temporal: ["Timestamp"]
+                        bigint_hashed: ["IpAddress", "AlertTitle", "AccountUpn", "Sha256"]
+                        low_cardinality: ["Category", "EntityType", "EvidenceRole"]
+                        high_missingness: ["ActionGrouped", "ActionGranular"]
+                        suspect_leakage: ["ThreatFamily", "LastVerdict", "SuspicionLevel"]
+                    output: "2.4.feature_inventory.column_catalog.json"
+              visual_eda:
+                enabled: true
+                techniques:
+                  categorical_distributions:
+                    enabled: true
+                    params:
+                      columns: ["IncidentGrade", "Category", "EntityType", "EvidenceRole"]
+                      sample_rows: 50000
+                      use_train_only: true
+                      plot_type: "countplot"
+                    output: "2.4.visual_eda.categorical_distributions.png"
+                  temporal_overview:
+                    enabled: true
+                    description: "Daily incident counts - lightweight visualization"
+                    params:
+                      time_column: "Timestamp"
+                      resample_rule: "D"
+                      aggregation: "count"
+                      sample_rows: 50000
+                    output: "2.4.visual_eda.temporal_overview.png"
+                  target_by_category:
+                    enabled: true
+                    description: "IncidentGrade distribution by Category (stacked bar)"
+                    params:
+                      target_column: "IncidentGrade"
+                      group_by: "Category"
+                      normalize: false
+                      sample_rows: 50000
+                    output: "2.4.visual_eda.target_by_category.png"
+            output_artifacts:
+              exploratory_summary: "2.4.visual_eda.exploratory_summary.json"
+              phase2_report: "2.4.phase2_summary_report.json"
+
+        critical_warnings:
+          exclude_incidentgrade_none:
+            enabled: true
+            description: "Flag IncidentGrade='None' rows for exclusion in Phase 3"
+            action: "create_exclusion_mask"
+          bigint_encoding_required:
+            enabled: true
+            description: "Alert: 26 BIGINT columns require target/frequency encoding in Phase 3"
+            columns_count: 26
+          timeseries_limitation:
+            enabled: true
+            description: "Warning: Only 14 days observation window - forecast horizon limited to 1-3 days"
+            max_forecast_days: 3
+          aggregation_required:
+            enabled: true
+            description: "Critical: Must aggregate Evidence→Incident before modeling to avoid label leakage"
+            hierarchy_levels: ["Evidence", "Alert", "Incident"]

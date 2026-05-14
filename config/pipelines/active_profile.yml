@@ -1,0 +1,12 @@
+# =========================================================================
+# ACTIVE PROFILE CONFIGURATION
+# =========================================================================
+# Controls which execution profile (dev/prod) is active across all pipelines.
+# Change 'active_profile' value to switch between development and production modes.
+#
+# Usage:
+#   - dev:  Fast iteration with smaller samples (50k rows)
+#   - prod: Full-scale execution with larger samples (200k rows)
+# =========================================================================
+
+active_profile: "dev"  # Options: "dev", "prod"

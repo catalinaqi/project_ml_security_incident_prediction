@@ -1,0 +1,60 @@
+# ============================================
+#  PYTHON & ENVIRONMENTS
+# ============================================
+
+# Virtual environments
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# Logs
+logs/
+*.log
+
+# ============================================
+#  NOTEBOOKS & OUTPUT
+# ============================================
+
+# Notebook autosaves
+.notebooks/
+notebooks/.ipynb_checkpoints/
+
+# Immagini generate
+#*.png
+#*.jpg
+#*.jpeg
+
+# Tabelle generate automaticamente
+#reports/
+out
+#src/crispml/*.out
+
+# ============================================
+#  POETRY
+# ============================================
+# poetry.lock
+# poetry.toml
+
+# ============================================
+#  IDE FILES
+# ============================================
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+
+# VSCode
+.vscode/
+
+# ============================================
+#  IDE FILES
+# ============================================
+data/raw/*.csv
+*.csv
+
+

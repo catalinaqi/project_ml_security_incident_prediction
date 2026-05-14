@@ -1,0 +1,76 @@
+[project]
+name = "project-ml-microsoft-security-incident-prediction"
+version = "0.1.0"
+description = "Clustering of security incidents using machine learning techniques"
+authors = [
+    { name = "Catalina", email = "ccequispe@gmail.com" },
+]
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "pandas (>=2.3.3,<3.0.0)",
+    "matplotlib (>=3.10.7,<4.0.0)",
+    "duckdb (>=1.4.4,<2.0.0)",
+    "kagglehub (==0.3.3)",
+    "pyyaml (>=6.0.3,<7.0.0)",
+    "pyarrow (>=24.0.0,<25.0.0)",
+    "scikit-learn (<1.8.0)",
+    "omegaconf (>=2.3.0,<3.0.0)",
+    "pydantic (>=2.13.4,<3.0.0)",
+    "xgboost (>=3.2.0,<4.0.0)",
+    "numpy (<2)"
+
+]
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+[tool.poetry]
+package-mode = true
+packages = [
+    { include = "crispdm", from = "src" }
+]
+[tool.poetry.group.dev.dependencies]
+jupyterlab = "^4.5.3"
+jupyter-server = "^2.17.0"
+notebook = "^7.5.3"
+deptry = "^0.25.1"
+ruff = "^0.15.11"
+jupyter = "^1.1.1"
+ipywidgets = "^8.1.8"
+mypy = "^1.20.2"
+pandas-stubs = "<2.2"
+pyyaml = "^6.0.3"
+scipy = "<1.13.0"
+pyarrow = "^24.0.0"
+scikit-learn = "<1.8.0"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+# E: pycodestyle, F: Pyflakes, D: pydocstyle (Docstrings), I: isort (Import order)
+select = ["E", "F", "D", "I", "W"]
+ignore = ["D100", "D104"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy" # <--- Fuerza el estilo NumPy
+
+[tool.ruff.format]
+skip-magic-trailing-comma = false
+quote-style = "double"
+# additional formatting rules for docstrings
+docstring-code-format = true
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+plugins = ["numpy.typing.mypy_plugin"]
+
+[[tool.mypy.overrides]]
+module = "pandas.*"
+ignore_missing_imports = true
+
+

@@ -1,0 +1,457 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# CLUSTERING PIPELINE CONFIGURATION
+# ══════════════════════════════════════════════════════════════════════════════
+# Purpose: CRISP-DM Phases 3-4-5 for unsupervised clustering analysis
+# Inherits: base_pipeline_config.yml (Phase 2: Data Understanding)
+# Problem Type: clustering (NO target column)
+# Techniques: KMeans, DBSCAN (choose manually)
+# Methodology: CRISP-DM
+# ══════════════════════════════════════════════════════════════════════════════
+
+clustering_pipeline_config:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # METADATA
+  # ────────────────────────────────────────────────────────────────────────────
+  metadata:
+    pipeline_key:
+      task: "clustering"
+      version: "1.0"
+      objective: "Unsupervised clustering without target variable. Phases 3-5."
+      # QUESTION: ¿Evidence-level o Incident-level clustering?
+      granularity: "evidence"  # TODO: Decide
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # INHERITANCE
+  # ────────────────────────────────────────────────────────────────────────────
+  inherits_from: "base_pipeline_config"
+  # Inherits:
+  #   - common_base_config (runtime, output_policy, random_seed)
+  #   - profiles (dev/prod with sample sizes)
+  #   - phase2_data_understanding (complete)
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # RUNTIME (Override base if needed)
+  # ────────────────────────────────────────────────────────────────────────────
+  runtime:
+    # Hereda de base, override solo si necesario
+    # random_seed: 7
+    # output_root: "outputs"
+    # overwrite_artifacts: true
+    log_level: "DEBUG"  # Override para clustering
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # PROFILES (Hereda de base)
+  # ────────────────────────────────────────────────────────────────────────────
+  # dev: 50k rows, prod: 200k rows
+  # Stratify en IncidentGrade aunque clustering no lo use como target
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PHASE 2: DATA UNDERSTANDING (DISABLED - Ejecutado por base_pipeline)
+  # ════════════════════════════════════════════════════════════════════════════
+  phases:
+    phase2_data_understanding:
+      enabled: true
+      # Already executed by base_pipeline_config
+      # Artifacts available:
+      #   - 2.1.data_acquisition.sample_train.parquet
+      #   - 2.1.data_acquisition.sample_test.parquet
+      #   - 2.2.schema_summary.json
+      #   - 2.3.data_quality_assessment.quality_summary.json
+      #   - 2.4.phase2_summary_report.json
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # PHASE 3: DATA PREPARATION
+    # ════════════════════════════════════════════════════════════════════════════
+    phase3_data_preparation:
+      enabled: true
+      objective: "Transform raw data into modeling-ready features. Fit on train, transform on test."
+
+      # QUESTION: ¿Combinar train+test para drift detection o mantener separados?
+      read_strategy:
+        mode: "sample"  # Hereda de profile activo
+        combine_before_sampling: false  # TODO: Decide
+        add_source_column: false  # true si necesitas diferenciar train/test después
+        input_source: "phase2"  # Lee de outputs de Phase 2
+
+      steps:
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 3.1: DATA SELECTION
+        # ──────────────────────────────────────────────────────────────────────
+        step_3_1_data_selection:
+          enabled: true
+          description: "Select features, remove IDs, exclude leakage suspects"
+
+          methods:
+            # Method: Sentinel Removal
+            sentinel_removal:
+              enabled: true
+              description: "Handle BIGINT pseudo-categorical columns"
+              techniques:
+                bigint_cleanup:
+                  enabled: true
+                  params:
+                    # QUESTION: ¿Qué threshold para cada BIGINT column?
+                    # Example: IpAddress > 300k → create flag + nullify
+                    thresholds: {}  # TODO: Define {col: threshold}
+                    actions:
+                      create_binary_flags: true
+                      nullify_above_threshold: true
+                  # OUTPUT: 3.1.sentinel_removal.bigint_cleanup.json
+                  # Expected: {column: {nullified_count, flag_created}}
+
+            # Method: Dataset Definition
+            dataset_definition:
+              enabled: true
+              description: "Define final feature set"
+              techniques:
+                manual_include_exclude:
+                  enabled: true
+                  params:
+                    include: []  # TODO: Specific features if needed
+                    exclude: []  # TODO: Add if needed
+                  # OUTPUT: 3.1.dataset_definition.manual_include_exclude.json
+
+                drop_technical_columns:
+                  enabled: true
+                  params:
+                    # CRITICAL: NO target_col for clustering
+                    # QUESTION: ¿Excluir IncidentGrade aquí o mantener para eval?
+                    manual_exclude:
+                      - "Id"              # Row identifier
+                      - "IncidentId"      # Group identifier
+                      - "AlertId"         # Group identifier
+                      - "IncidentGrade"   # TODO: ¿Excluir o mantener para eval?
+                      # TODO: Add leakage suspects
+                      # - "ActionGrouped"
+                      # - "ActionGranular"
+                  # OUTPUT: 3.1.dataset_definition.drop_technical_columns.json
+
+            # Method: Feature Selection
+            feature_selection:
+              enabled: true
+              description: "Remove constant/duplicate features"
+              techniques:
+                remove_constant_features:
+                  enabled: true
+                  params:
+                    threshold_unique: 1
+                  # OUTPUT: 3.1.feature_selection.remove_constant_features.json
+
+                remove_duplicate_features:
+                  enabled: true
+                  params:
+                    strategy: "exact"
+                  # OUTPUT: 3.1.feature_selection.remove_duplicate_features.json
+
+          # OUTPUT ARTIFACTS
+          output_artifacts:
+            final_features: "3.1.data_selection.final_features.json"
+            # Expected: {selected: [cols], excluded: [cols], reason: {col: reason}}
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 3.2: DATA CLEANING
+        # ──────────────────────────────────────────────────────────────────────
+        step_3_2_data_cleaning:
+          enabled: true
+          description: "Impute missing, handle outliers, normalize categories"
+
+          methods:
+            # Method: Missing Data Handling
+            missing_data_handling:
+              enabled: true
+              techniques:
+                # QUESTION: ¿Median o Mean imputation para numéricos?
+                numeric_imputation:
+                  enabled: true
+                  params:
+                    strategy: "median"  # TODO: median, mean, or constant
+                  # OUTPUT: 3.2.missing_data_handling.numeric_imputation.json
+
+                categorical_imputation:
+                  enabled: true
+                  params:
+                    strategy: "mode"  # TODO: mode, constant, or custom
+                  # OUTPUT: 3.2.missing_data_handling.categorical_imputation.json
+
+            # Method: Outlier Handling
+            outlier_handling:
+              enabled: true
+              techniques:
+                # QUESTION: ¿IQR clipping o Z-score?
+                iqr_clipping:
+                  enabled: true
+                  params:
+                    k: 1.5  # TODO: Adjust multiplier
+                    exclude_columns: []  # TODO: High-cardinality to exclude
+                  # OUTPUT: 3.2.outlier_handling.iqr_clipping.png
+                  # Expected: Before/after boxplots
+
+            # Method: Categorical Noise
+            categorical_noise:
+              enabled: true
+              techniques:
+                text_normalization:
+                  enabled: true
+                  params:
+                    lowercase: true
+                    remove_accents: true
+                  # OUTPUT: 3.2.categorical_noise.text_normalization.json
+
+                rare_grouping:
+                  enabled: true
+                  params:
+                    min_freq: 0.001  # TODO: Adjust threshold
+                  # OUTPUT: 3.2.categorical_noise.rare_grouping.json
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 3.3: DATA TRANSFORMATION
+        # ──────────────────────────────────────────────────────────────────────
+        step_3_3_data_transformation:
+          enabled: true
+          description: "Scale numerics, encode categoricals, engineer features"
+
+          methods:
+            # Method: Numeric Scaling
+            numeric_scaling:
+              enabled: true
+              techniques:
+                # QUESTION: ¿StandardScaler o MinMaxScaler?
+                standard_scaling:
+                  enabled: true
+                  params:
+                    columns: []  # TODO: List numeric columns
+                  # OUTPUT: 3.3.numeric_scaling.standard_scaling.json
+
+            # Method: Categorical Encoding
+            encoding:
+              enabled: true
+              techniques:
+                # QUESTION: ¿Frequency, Target, o Ordinal encoding?
+                frequency_encoding:
+                  enabled: true
+                  params:
+                    columns: []  # TODO: High-cardinality BIGINT columns
+                    fillna_value: 0
+                  # OUTPUT: 3.3.encoding.frequency_encoding.json
+
+                ordinal_encoding:
+                  enabled: false  # TODO: Enable if ordinal categories exist
+                  params:
+                    columns: []  # Example: ["SuspicionLevel"]
+                    categories: {}  # Example: {SuspicionLevel: [Low, Medium, High]}
+
+            # Method: Feature Engineering
+            feature_engineering:
+              enabled: true
+              techniques:
+                # QUESTION: ¿Qué agregaciones necesitas?
+                # Example: n_evidences_per_incident, alerts_per_incident
+                groupby_aggregations:
+                  enabled: false  # TODO: Enable if needed
+                  params:
+                    groupby_column: null  # TODO: "IncidentId"
+                    aggregations: {}  # TODO: Define {feature: {column, method}}
+                  # OUTPUT: 3.3.feature_engineering.groupby_aggregations.json
+
+            # Method: Temporal Features
+            temporal_features:
+              enabled: true
+              techniques:
+                datetime_extraction:
+                  enabled: true
+                  params:
+                    column: "Timestamp"
+                    extract: ["hour"]  # TODO: Add day_of_week, month, etc.
+                    drop_original: true
+                  # OUTPUT: 3.3.temporal_features.datetime_extraction.json
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 3.5: DATA FORMATTING
+        # ──────────────────────────────────────────────────────────────────────
+        step_3_5_data_formatting:
+          enabled: true
+          description: "Save prepared datasets and fitted transformers"
+
+          output_artifacts:
+            train_prepared: "3.5.data_formatting.train_prepared.parquet"
+            # Expected: Cleaned, scaled, encoded train data
+
+            test_prepared: "3.5.data_formatting.test_prepared.parquet"
+            # Expected: Test data transformed with train-fitted transformers
+
+            transformers_pipeline: "3.5.data_formatting.transformers_pipeline.pkl"
+            # Expected: Serialized sklearn Pipeline for reproducibility
+
+            format: "parquet"
+            compression: "snappy"
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # PHASE 4: MODELING
+    # ════════════════════════════════════════════════════════════════════════════
+    phase4_data_modeling:
+      enabled: true
+      objective: "Train and optimize clustering algorithms"
+
+      read_strategy:
+        input_source: "3.5.data_formatting.train_prepared.parquet"
+
+      steps:
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 4.1: ALGORITHM SELECTION
+        # ──────────────────────────────────────────────────────────────────────
+        step_4_1_algorithm_selection:
+          enabled: true
+          description: "Select clustering techniques to train"
+
+          methods:
+            algorithm_selection:
+              techniques:
+                # QUESTION: ¿Habilitar KMeans, DBSCAN, ambos, o agregar Hierarchical?
+                kmeans:
+                  enabled: true  # TODO: Choose
+                  priority: 1
+                  # OUTPUT: 4.1.algorithm_selection.kmeans.json
+
+                dbscan:
+                  enabled: false  # TODO: Choose
+                  priority: 2
+                  # OUTPUT: 4.1.algorithm_selection.dbscan.json
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 4.2: MODEL TRAINING
+        # ──────────────────────────────────────────────────────────────────────
+        step_4_2_model_training:
+          enabled: true
+          description: "Train models with hyperparameter tuning"
+
+          methods:
+            model_training:
+              techniques:
+                fit:
+                  enabled: true
+                  params:
+                    fit_best_only: true
+                    store_all_models: false
+                  # OUTPUT: 4.2.model_training.{technique}.pkl
+
+                hyperparameter_tuning:
+                  enabled: true
+                  params:
+                    strategy: "grid"  # TODO: grid or random
+                    scoring: "silhouette"  # TODO: silhouette, davies_bouldin, calinski
+                    refit: true
+
+                    # QUESTION: ¿Qué rangos de hiperparámetros explorar?
+                    grids:
+                      kmeans:
+                        n_clusters: []  # TODO: [2, 3, 4, 5, 6, 7, 8]
+                        init: ["k-means++"]
+                        max_iter: [300]
+                        # OUTPUT: 4.2.model_training.kmeans.grid_results.json
+
+                      dbscan:
+                        eps: []  # TODO: [0.3, 0.5, 0.8, 1.0]
+                        min_samples: []  # TODO: [3, 5, 10]
+                        metric: ["euclidean"]
+                        # OUTPUT: 4.2.model_training.dbscan.grid_results.json
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 4.3: TEST DESIGN GENERATION
+        # ──────────────────────────────────────────────────────────────────────
+        step_4_3_test_design:
+          enabled: true
+          description: "Document evaluation strategy"
+          # OUTPUT: 4.3.test_design.evaluation_plan.json
+          # Expected: {metrics: [], validation_approach: ""}
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 4.4: MODEL EVALUATION
+        # ──────────────────────────────────────────────────────────────────────
+        step_4_4_model_evaluation:
+          enabled: true
+          description: "Evaluate clustering quality"
+
+          methods:
+            model_evaluation:
+              techniques:
+                # Unsupervised Metrics
+                silhouette:
+                  enabled: true
+                  params:
+                    sample_size: 20000  # TODO: Adjust for performance
+                    metric: "euclidean"
+                  # OUTPUT: 4.4.model_evaluation.silhouette.json
+                  # Expected: {score: float, per_cluster: []}
+
+                davies_bouldin:
+                  enabled: true
+                  # OUTPUT: 4.4.model_evaluation.davies_bouldin.json
+                  # Expected: {score: float} (lower is better)
+
+                calinski_harabasz:
+                  enabled: true
+                  # OUTPUT: 4.4.model_evaluation.calinski_harabasz.json
+                  # Expected: {score: float} (higher is better)
+
+                # QUESTION: ¿Incluir métricas supervisadas usando IncidentGrade?
+                adjusted_rand_index:
+                  enabled: false  # TODO: Enable if comparing with ground truth
+                  params:
+                    ground_truth_column: "IncidentGrade"
+                  # OUTPUT: 4.4.model_evaluation.adjusted_rand_index.json
+                  # Expected: {ari_score: float, contingency_table: {}}
+
+                # Cluster Profiling
+                cluster_profiling:
+                  enabled: true
+                  params:
+                    samples_per_cluster: 100
+                  # OUTPUT: 4.4.model_evaluation.cluster_profiling.json
+                  # Expected: {cluster_id: {size, centroid, top_features}}
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # PHASE 5: EVALUATION & INTERPRETATION
+    # ════════════════════════════════════════════════════════════════════════════
+    phase5_evaluation_and_interpretation:
+      enabled: true
+      objective: "Extract insights and validate business value"
+
+      steps:
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 5.1: KNOWLEDGE EXTRACTION
+        # ──────────────────────────────────────────────────────────────────────
+        step_5_1_interpretation:
+          enabled: true
+          description: "Interpret cluster characteristics"
+          # OUTPUT: 5.1.knowledge_extraction.cluster_interpretation.json
+          # Expected: {cluster_id: {dominant_features, characteristics, size}}
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 5.2: BUSINESS RESULTS EVALUATION
+        # ──────────────────────────────────────────────────────────────────────
+        step_5_2_business_evaluation:
+          enabled: true
+          description: "Validate clustering aligns with business goals"
+          # QUESTION: ¿Comparar clusters con IncidentGrade distribution?
+          # OUTPUT: 5.2.business_evaluation.cluster_vs_target.png
+          # Expected: Crosstab cluster_id vs IncidentGrade
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 5.3: PROCESS AUDIT
+        # ──────────────────────────────────────────────────────────────────────
+        step_5_3_process_audit:
+          enabled: true
+          description: "Review pipeline reproducibility"
+          # OUTPUT: 5.3.process_audit.reproducibility_check.json
+          # Expected: {seed_used, config_hash, artifacts_list}
+
+        # ──────────────────────────────────────────────────────────────────────
+        # STEP 5.4: DECISION MAKING
+        # ──────────────────────────────────────────────────────────────────────
+        step_5_4_decision_making:
+          enabled: true
+          description: "Next steps and recommendations"
+          # QUESTION: ¿Usar clusters como features para classification?
+          # OUTPUT: 5.4.decision_making.recommendations.json
+          # Expected: {next_steps: [], deployment_ready: bool}

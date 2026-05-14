@@ -1,0 +1,358 @@
+{
+  "clustering_pipeline_config": {
+    "metadata": {
+      "pipeline_key": {
+        "task": "clustering",
+        "version": "1.0",
+        "objective": "Unsupervised clustering without target variable. Phases 3-5.",
+        "granularity": "evidence"
+      }
+    },
+    "inherits_from": "base_pipeline_config",
+    "runtime": {
+      "log_level": "DEBUG"
+    },
+    "phases": {
+      "phase2_data_understanding": {
+        "enabled": false
+      },
+      "phase3_data_preparation": {
+        "enabled": true,
+        "objective": "Transform raw data into modeling-ready features. Fit on train, transform on test.",
+        "read_strategy": {
+          "mode": "sample",
+          "combine_before_sampling": false,
+          "add_source_column": false,
+          "input_source": "phase2"
+        },
+        "steps": {
+          "step_3_1_data_selection": {
+            "enabled": true,
+            "description": "Select features, remove IDs, exclude leakage suspects",
+            "methods": {
+              "sentinel_removal": {
+                "enabled": true,
+                "description": "Handle BIGINT pseudo-categorical columns",
+                "techniques": {
+                  "bigint_cleanup": {
+                    "enabled": true,
+                    "params": {
+                      "thresholds": {},
+                      "actions": {
+                        "create_binary_flags": true,
+                        "nullify_above_threshold": true
+                      }
+                    }
+                  }
+                }
+              },
+              "dataset_definition": {
+                "enabled": true,
+                "description": "Define final feature set",
+                "techniques": {
+                  "manual_include_exclude": {
+                    "enabled": true,
+                    "params": {
+                      "include": [],
+                      "exclude": []
+                    }
+                  },
+                  "drop_technical_columns": {
+                    "enabled": true,
+                    "params": {
+                      "manual_exclude": [
+                        "Id",
+                        "IncidentId",
+                        "AlertId",
+                        "IncidentGrade"
+                      ]
+                    }
+                  }
+                }
+              },
+              "feature_selection": {
+                "enabled": true,
+                "description": "Remove constant/duplicate features",
+                "techniques": {
+                  "remove_constant_features": {
+                    "enabled": true,
+                    "params": {
+                      "threshold_unique": 1
+                    }
+                  },
+                  "remove_duplicate_features": {
+                    "enabled": true,
+                    "params": {
+                      "strategy": "exact"
+                    }
+                  }
+                }
+              }
+            },
+            "output_artifacts": {
+              "final_features": "3.1.data_selection.final_features.json"
+            }
+          },
+          "step_3_2_data_cleaning": {
+            "enabled": true,
+            "description": "Impute missing, handle outliers, normalize categories",
+            "methods": {
+              "missing_data_handling": {
+                "enabled": true,
+                "techniques": {
+                  "numeric_imputation": {
+                    "enabled": true,
+                    "params": {
+                      "strategy": "median"
+                    }
+                  },
+                  "categorical_imputation": {
+                    "enabled": true,
+                    "params": {
+                      "strategy": "mode"
+                    }
+                  }
+                }
+              },
+              "outlier_handling": {
+                "enabled": true,
+                "techniques": {
+                  "iqr_clipping": {
+                    "enabled": true,
+                    "params": {
+                      "k": 1.5,
+                      "exclude_columns": []
+                    }
+                  }
+                }
+              },
+              "categorical_noise": {
+                "enabled": true,
+                "techniques": {
+                  "text_normalization": {
+                    "enabled": true,
+                    "params": {
+                      "lowercase": true,
+                      "remove_accents": true
+                    }
+                  },
+                  "rare_grouping": {
+                    "enabled": true,
+                    "params": {
+                      "min_freq": 0.001
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "step_3_3_data_transformation": {
+            "enabled": true,
+            "description": "Scale numerics, encode categoricals, engineer features",
+            "methods": {
+              "numeric_scaling": {
+                "enabled": true,
+                "techniques": {
+                  "standard_scaling": {
+                    "enabled": true,
+                    "params": {
+                      "columns": []
+                    }
+                  }
+                }
+              },
+              "encoding": {
+                "enabled": true,
+                "techniques": {
+                  "frequency_encoding": {
+                    "enabled": true,
+                    "params": {
+                      "columns": [],
+                      "fillna_value": 0
+                    }
+                  },
+                  "ordinal_encoding": {
+                    "enabled": false,
+                    "params": {
+                      "columns": [],
+                      "categories": {}
+                    }
+                  }
+                }
+              },
+              "feature_engineering": {
+                "enabled": true,
+                "techniques": {
+                  "groupby_aggregations": {
+                    "enabled": false,
+                    "params": {
+                      "groupby_column": null,
+                      "aggregations": {}
+                    }
+                  }
+                }
+              },
+              "temporal_features": {
+                "enabled": true,
+                "techniques": {
+                  "datetime_extraction": {
+                    "enabled": true,
+                    "params": {
+                      "column": "Timestamp",
+                      "extract": [
+                        "hour"
+                      ],
+                      "drop_original": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "step_3_5_data_formatting": {
+            "enabled": true,
+            "description": "Save prepared datasets and fitted transformers",
+            "output_artifacts": {
+              "train_prepared": "3.5.data_formatting.train_prepared.parquet",
+              "test_prepared": "3.5.data_formatting.test_prepared.parquet",
+              "transformers_pipeline": "3.5.data_formatting.transformers_pipeline.pkl",
+              "format": "parquet",
+              "compression": "snappy"
+            }
+          }
+        }
+      },
+      "phase4_modeling": {
+        "enabled": true,
+        "objective": "Train and optimize clustering algorithms",
+        "read_strategy": {
+          "input_source": "3.5.data_formatting.train_prepared.parquet"
+        },
+        "steps": {
+          "step_4_1_algorithm_selection": {
+            "enabled": true,
+            "description": "Select clustering techniques to train",
+            "methods": {
+              "algorithm_selection": {
+                "techniques": {
+                  "kmeans": {
+                    "enabled": true,
+                    "priority": 1
+                  },
+                  "dbscan": {
+                    "enabled": false,
+                    "priority": 2
+                  }
+                }
+              }
+            }
+          },
+          "step_4_2_model_training": {
+            "enabled": true,
+            "description": "Train models with hyperparameter tuning",
+            "methods": {
+              "model_training": {
+                "techniques": {
+                  "fit": {
+                    "enabled": true,
+                    "params": {
+                      "fit_best_only": true,
+                      "store_all_models": false
+                    }
+                  },
+                  "hyperparameter_tuning": {
+                    "enabled": true,
+                    "params": {
+                      "strategy": "grid",
+                      "scoring": "silhouette",
+                      "refit": true,
+                      "grids": {
+                        "kmeans": {
+                          "n_clusters": [],
+                          "init": [
+                            "k-means++"
+                          ],
+                          "max_iter": [
+                            300
+                          ]
+                        },
+                        "dbscan": {
+                          "eps": [],
+                          "min_samples": [],
+                          "metric": [
+                            "euclidean"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "step_4_3_test_design": {
+            "enabled": true,
+            "description": "Document evaluation strategy"
+          },
+          "step_4_4_model_evaluation": {
+            "enabled": true,
+            "description": "Evaluate clustering quality",
+            "methods": {
+              "model_evaluation": {
+                "techniques": {
+                  "silhouette": {
+                    "enabled": true,
+                    "params": {
+                      "sample_size": 20000,
+                      "metric": "euclidean"
+                    }
+                  },
+                  "davies_bouldin": {
+                    "enabled": true
+                  },
+                  "calinski_harabasz": {
+                    "enabled": true
+                  },
+                  "adjusted_rand_index": {
+                    "enabled": false,
+                    "params": {
+                      "ground_truth_column": "IncidentGrade"
+                    }
+                  },
+                  "cluster_profiling": {
+                    "enabled": true,
+                    "params": {
+                      "samples_per_cluster": 100
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "phase5_evaluation": {
+        "enabled": true,
+        "objective": "Extract insights and validate business value",
+        "steps": {
+          "step_5_1_knowledge_extraction": {
+            "enabled": true,
+            "description": "Interpret cluster characteristics"
+          },
+          "step_5_2_business_evaluation": {
+            "enabled": true,
+            "description": "Validate clustering aligns with business goals"
+          },
+          "step_5_3_process_audit": {
+            "enabled": true,
+            "description": "Review pipeline reproducibility"
+          },
+          "step_5_4_decision_making": {
+            "enabled": true,
+            "description": "Next steps and recommendations"
+          }
+        }
+      }
+    }
+  }
+}

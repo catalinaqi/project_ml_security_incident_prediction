@@ -1,0 +1,40 @@
+# =============================================================================
+# DATASET CONFIGURATION
+# Single responsibility: Defines WHERE the data resides and HOW to ingest it.
+# =============================================================================
+
+datasets:
+  ms_sec_inc_pre:
+    name: "microsoft_security_incident_prediction"
+    version: "1.0"
+    description: >
+      Microsoft Security Incident Prediction (GUIDE). 
+      Scale: 13M+ rows (Train 2G) / 6M+ rows (Test 1G).
+      Note: High cardinality in ID columns requires specific encoding strategies.
+
+    source:
+      url: "https://www.kaggle.com/datasets/Microsoft/microsoft-security-incident-prediction"
+
+      # -------------------------------------------------------------------------
+      # download_executor: Reference to the Python module responsible for
+      # Phase 2.1 (Acquisition). Used by the orchestrator for automation.
+      # -------------------------------------------------------------------------
+      download_executor: "src/crispdm/data/download_utils_data.py"
+
+    paths:
+      # -------------------------------------------------------------------------
+      # Target locations for the data pipeline after the executor runs.
+      # -------------------------------------------------------------------------
+      train: "data/raw/train/GUIDE_Train.csv"
+      test: "data/raw/test/GUIDE_Test.csv"
+
+    csv_params:
+      sep: ","
+      encoding: "utf-8"
+      decimal: "."
+
+      # -------------------------------------------------------------------------
+      # low_memory: false -> CRITICAL. Prevents pandas from inferring mixed dtypes
+      # in chunks, which leads to silent data corruption in large GUIDE files.
+      # -------------------------------------------------------------------------
+      low_memory: false
