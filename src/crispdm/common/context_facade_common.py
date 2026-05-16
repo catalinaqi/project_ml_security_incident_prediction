@@ -1,49 +1,64 @@
+# src/crispdm/common/context_facade_common.py
+"""
+=============================================================================
+Why this module exists
+-----------------------------------------------------------------------------
+
+Public surface (what the rest of the codebase uses):
+-----------------------------------------------------------------------------
+
+Private helpers (internal to this module only):
+-----------------------------------------------------------------------------
+
+Program flow:
+-----------------------------------------------------------------------------
+
+Key design decisions:
+-----------------------------------------------------------------------------
+
+Design patterns:
+-----------------------------------------------------------------------------
+
+=============================================================================
+"""
+
 from __future__ import annotations
+# =============================================================================
+# SECTION 1 – Standard-library imports
+# =============================================================================
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+# =============================================================================
+# SECTION 2 – Third-party imports
+# =============================================================================
 import pandas as pd
 from omegaconf import DictConfig
-
+# =============================================================================
+# SECTION 3 – Internal imports
+# =============================================================================
 from src.crispdm.common.logging_adapter_common import get_logger
 from src.crispdm.common.path_service_common import find_project_root, resolve_path
 from src.crispdm.configuration.enum_registry_config import PhaseDir
-
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION 4 — Level logger
+# ──────────────────────────────────────────────────────────────────────────────
 log = get_logger(__name__)
-
+# =============================================================================
+# SECTION 5 — Constants
+# =============================================================================
 RUN_ID_FORMAT = "%Y%m%d_%H%M%S"
 RUNS_SUBDIR = "runs"
+# =============================================================================
+# SECTION 6 — Type variable
+# =============================================================================
+# (none required – )
 
-
-def make_run_id(ts: Optional[datetime] = None) -> str:
-    if ts is None:
-        ts = datetime.now()
-    run_id = ts.strftime(RUN_ID_FORMAT)
-    log.debug(f"Generated run_id: {run_id}")
-    return run_id
-
-
-def make_run_dir(
-        output_root: str | Path,
-        task: str,
-        dataset_key: str,
-        run_id: str
-) -> Path:
-
-    log.info(f"Creating run directory: task={task}, dataset={dataset_key}, run_id={run_id}")
-
-    # Resolve output_root to absolute path
-    if isinstance(output_root, str):
-        output_root = resolve_path(output_root)
-
-    # Create directory structure: output_root/runs/task/dataset_key/run_id
-    run_dir = output_root / RUNS_SUBDIR / task / dataset_key / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    log.info(f"Run directory created: {run_dir}")
-    return run_dir
-
+# =============================================================================
+# SECTION 7 — Class
+# =============================================================================
+# (none required – )
 
 @dataclass
 class RunContext:
@@ -167,3 +182,38 @@ def create_run_context(
 
     log.info(f"Run context created: run_id={run_id}, run_dir={run_dir}")
     return context
+# =============================================================================
+# SECTION 8 — Private functions
+# =============================================================================
+# (none required – )
+
+# =============================================================================
+# SECTION 9 — Public functions
+# =============================================================================
+def make_run_id(ts: Optional[datetime] = None) -> str:
+    if ts is None:
+        ts = datetime.now()
+    run_id = ts.strftime(RUN_ID_FORMAT)
+    log.debug(f"Generated run_id: {run_id}")
+    return run_id
+
+
+def make_run_dir(
+        output_root: str | Path,
+        task: str,
+        dataset_key: str,
+        run_id: str
+) -> Path:
+
+    log.info(f"Creating run directory: task={task}, dataset={dataset_key}, run_id={run_id}")
+
+    # Resolve output_root to absolute path
+    if isinstance(output_root, str):
+        output_root = resolve_path(output_root)
+
+    # Create directory structure: output_root/runs/task/dataset_key/run_id
+    run_dir = output_root / RUNS_SUBDIR / task / dataset_key / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    log.info(f"Run directory created: {run_dir}")
+    return run_dir

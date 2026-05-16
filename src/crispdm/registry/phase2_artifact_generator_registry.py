@@ -168,19 +168,7 @@ def _write_sample_stats(ctx: RunContext, path: str, **data) -> None:
     log.info("[2.1] saved stats_comparison to %s", path)
 
 
-@register_artifact(StepsPhase.STEP_2_1.value, StepOutputArtifact.HIERARCHY_REPORT)
-def _write_hierarchy_report_artifact(ctx: RunContext, path: str, **data) -> None:
-    # hierarchy_report.json was already written in Step 6 via technique output.
-    # This artifact is a copy/alias of the same file.
-    src = ctx.phase2_dir / data["hierarchy_output_path"]
-    dst = ctx.phase2_dir / path
-    if src.exists() and src != dst:
-        import shutil
 
-        shutil.copy2(src, dst)
-        log.info("[2.1] saved hierarchy_report to %s", path)
-    elif src == dst:
-        log.debug("[2.1] hierarchy_report path same as technique output, skipping copy")
 
 
 # =============================================================================

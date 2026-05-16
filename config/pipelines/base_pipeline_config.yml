@@ -24,13 +24,13 @@ pipeline_base:
 
   profiles:
     dev:
-      enabled: true
+      enabled: false
       description: "Fast iteration mode with smaller samples for development"
       mode: "sample"
       sample_rows: 7000 #50000
       stratify_column: "IncidentGrade"
     prod:
-      enabled: false
+      enabled: true
       description: "Full-scale execution with larger samples for production analysis"
       mode: "sample"
       sample_rows: 200000
@@ -81,6 +81,7 @@ pipeline_base:
                     output: "2.1.data_acquisition.load_csv_test.json"
                   hierarchy_profiling:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Analyze Evidence→Alert→Incident hierarchy and ratios"
                     params:
                       hierarchy_levels: ["Id", "AlertId", "IncidentId"]
@@ -88,12 +89,11 @@ pipeline_base:
                       expected_ratios:
                         evidences_per_incident: 20.4
                         alerts_per_incident: 2.7
-                    output: "2.1.data_acquisition.hierarchy_profiling.json"
+                    output: "2.1.data_acquisition.hierarchy_report.json"
             output_artifacts:
               sample_train_parquet: "2.1.data_acquisition.sample_train.parquet"
               sample_test_parquet: "2.1.data_acquisition.sample_test.parquet"
               sample_stats: "2.1.data_acquisition.stats_comparison.json"
-              hierarchy_report: "2.1.data_acquisition.hierarchy_report.json"
 
           step_2_2_data_description:
             enabled: true
@@ -104,6 +104,7 @@ pipeline_base:
                 techniques:
                   column_metadata:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       include_cardinality: true
                       include_dtypes: true
@@ -112,6 +113,7 @@ pipeline_base:
                     output: "2.2.schema_analysis.column_metadata.json"
                   schema_comparison:
                     enabled: true
+                    split: "compare" # both, train, test, compare
                     params:
                       check_column_names: true
                       check_dtypes: true
@@ -126,6 +128,7 @@ pipeline_base:
                 techniques:
                   basic_stats:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       numeric_only: true
                       exclude_bigint_hashed: true
@@ -136,6 +139,7 @@ pipeline_base:
                 techniques:
                   multi_value_parsing:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Parse comma-separated values in MitreTechniques and Roles"
                     params:
                       columns: ["MitreTechniques", "Roles"]
@@ -146,6 +150,7 @@ pipeline_base:
                     output: "2.2.categorical_analysis.multi_value_parsing.json"
                   cardinality_profiling:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Classify columns by cardinality and identify BIGINT pseudo-categoricals"
                     params:
                       target_columns:
@@ -157,6 +162,7 @@ pipeline_base:
                     output: "2.2.categorical_analysis.cardinality_profiling.json"
                   target_distribution:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Analyze IncidentGrade distribution and detect 'None' values"
                     params:
                       target_column: "IncidentGrade"
@@ -169,6 +175,7 @@ pipeline_base:
                 techniques:
                   id_column_detection:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Detect identifier columns (uniqueness >95%)"
                     params:
                       id_patterns: ["*Id", "AccountSid", "AccountObjectId", "NetworkMessageId"]
@@ -176,6 +183,7 @@ pipeline_base:
                     output: "2.2.special_feature_detection.id_columns.json"
                   entity_conditional_sparsity:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Detect EntityType-dependent NULL patterns (Device*, Account*, etc.)"
                     params:
                       entity_column: "EntityType"
@@ -204,6 +212,7 @@ pipeline_base:
                 techniques:
                   completeness_report:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       include_patterns: true
                       show_top_columns: 50
@@ -214,6 +223,7 @@ pipeline_base:
                 techniques:
                   duplicate_detection:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Detect duplicates at Evidence level (Id column)"
                     params:
                       subset: ["Id"]
@@ -221,6 +231,7 @@ pipeline_base:
                     output: "2.3.structural_integrity.duplicate_detection.json"
                   sentinel_detection:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       sentinel_values: [-1, 0, 999, 9999]
                       check_columns: ["CountryCode", "OSVersion"]
@@ -231,6 +242,7 @@ pipeline_base:
                 techniques:
                   crosstab_analysis:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       target_column: "IncidentGrade"
                       suspect_columns: ["ThreatFamily", "LastVerdict", "SuspicionLevel", "ActionGrouped"]
@@ -239,6 +251,7 @@ pipeline_base:
                     output: "2.3.potential_leakage_detection.crosstab_analysis.json"
                   post_triage_detection:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Detect features likely generated after incident triage"
                     params:
                       high_missingness_threshold: 0.9
@@ -249,6 +262,7 @@ pipeline_base:
                 techniques:
                   timestamp_range:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Verify observation window is 14 days"
                     params:
                       timestamp_column: "Timestamp"
@@ -260,6 +274,7 @@ pipeline_base:
                 techniques:
                   data_drift:
                     enabled: true
+                    split: "compare" # both, train, test, compare
                     params:
                       compare_datasets: true
                       columns: [ "Category", "SuspicionLevel", "DetectorId" ]
@@ -277,6 +292,7 @@ pipeline_base:
                 techniques:
                   column_catalog:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       include_created_in_phase_2: false
                       categorize_by_role: true
@@ -294,6 +310,7 @@ pipeline_base:
                 techniques:
                   categorical_distributions:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     params:
                       columns: ["IncidentGrade", "Category", "EntityType", "EvidenceRole"]
                       sample_rows: 50000
@@ -302,6 +319,7 @@ pipeline_base:
                     output: "2.4.visual_eda.categorical_distributions.png"
                   temporal_overview:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "Daily incident counts - lightweight visualization"
                     params:
                       time_column: "Timestamp"
@@ -311,6 +329,7 @@ pipeline_base:
                     output: "2.4.visual_eda.temporal_overview.png"
                   target_by_category:
                     enabled: true
+                    split: "both" # both, train, test, compare
                     description: "IncidentGrade distribution by Category (stacked bar)"
                     params:
                       target_column: "IncidentGrade"
