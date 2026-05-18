@@ -19,7 +19,7 @@ datasets:
       # download_executor: Reference to the Python module responsible for
       # Phase 2.1 (Acquisition). Used by the orchestrator for automation.
       # -------------------------------------------------------------------------
-      download_executor: "src/crispdm/data/download_utils_data.py"
+      download_executor: "src/crispdm/data/download_extractor_data.py"
 
     paths:
       # -------------------------------------------------------------------------

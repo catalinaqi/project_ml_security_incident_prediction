@@ -213,6 +213,9 @@ class StageSubDir(str, Enum):
 
 class StepOutputArtifact(str, Enum):
     """Keys for output_artifacts in Phase 2 steps YAML configuration."""
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 2 – Data Understanding
+    # ──────────────────────────────────────────────────────────────────────────
     # Step 2.1
     SAMPLE_TRAIN_PARQUET = "sample_train_parquet"
     SAMPLE_TEST_PARQUET = "sample_test_parquet"
@@ -230,6 +233,22 @@ class StepOutputArtifact(str, Enum):
     # Step 2.4
     EXPLORATORY_SUMMARY = "exploratory_summary"
     PHASE2_REPORT = "phase2_report"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Phase 3 – Data Preparation
+    # ──────────────────────────────────────────────────────────────────────────
+    # Step 3.1
+    FINAL_FEATURES = "final_features"
+    OVERVIEW_PLOT = "overview_plot"
+    # Step 3.2
+    IMPUTATION_CONSOLIDATED="imputation_consolidated"
+    CLEANING_SUMMARY="cleaning_summary"
+    # Step 3.3
+    TRANSFORMATION_SUMMARY="transformation_summary"
+    # Step 3.4
+    TRAIN_PREPARED="train_prepared"
+    TEST_PREPARED="test_prepared"
+    TRANSFORMERS_PIPELINE="transformers_pipeline"
 
 class StepsPhase(str, Enum):  # noqa: D101
     STEP_2_1 = "step_2_1_data_acquisition"

@@ -1,4 +1,4 @@
-# src/crispdm/common/download_utils_data.py
+# src/crispdm/common/download_extractor_data.py
 
 import shutil
 from pathlib import Path
@@ -88,7 +88,7 @@ def download_microsoft_dataset(
     """
     try:
         # 1. Resolve paths using pathlib (Rule PTH)
-        # Assuming: src/crispdm/common/download_utils_data.py -> project_root is 3 levels up
+        # Assuming: src/crispdm/common/download_extractor_data.py -> project_root is 3 levels up
         project_root = Path(__file__).resolve().parents[3]
 
         raw_dir = project_root / "data" / "raw"

@@ -27,7 +27,7 @@ Project_DS_Microsoft_Security_Incident_Prediction/
 │   │   └── dataset_config.yml                     # Source: path, separator, encoding, chunking strategy
 │   └── pipelines/
 │       ├── base_pipeline_config.yml                # Phase 2 config
-│       ├── clustering_pipeline_config.yml          # Phases 2→5 config 
+│       ├── clustering_pipeline_config.yml          # Phases 3→5 config 
 │       ├── active_profile.yml          # 
 │
 ├── data/                                          # Raw data only — never modified by the pipeline
@@ -50,6 +50,7 @@ Project_DS_Microsoft_Security_Incident_Prediction/
 │       ├── model/                                 # ← Training, evaluation & registry
 │       ├── interpretation/                        # ← Explainability & error analysis
 │       ├── pipeline/                              # ← Task-level orchestrators
+│       ├── registry/                              # ← 
 │       ├── reporting/                             # ← Artifact persistence & plots
 │       ├── phase/                                 # ← CRISP-DM phase runners
 │       └── __init__.py
@@ -136,12 +137,14 @@ switch algorithms, hyperparameters, feature strategies, or output settings.
 ### Files
 
 ```
-config/
-├── datasets/
-│   └── dataset_config.yml               # Dataset source, paths, csv_params, read_strategy per phase
-└── pipelines/
-    ├── clustering_pipeline_config.yml
-    ├── classification_pipeline_config.yml
+├── config/                                        # YAML-driven configuration — no hardcoded params
+│   ├── datasets/
+│   │   └── dataset_config.yml                     # Source: path, separator, encoding, chunking strategy
+│   └── pipelines/
+│       ├── base_pipeline_config.yml                # Phase 2 config
+│       ├── clustering_pipeline_config.yml          # Phases 3→5 config 
+│       ├── active_profile.yml          # 
+│
 ```
 
 ### Dataset config key fields (`dataset_config.yml`)
@@ -167,10 +170,14 @@ under `out/runs/<task>/<dataset_key>/<timestamp>/` .
 Every run produces a self-contained, reproducible snapshot under `out/`:
 
 ```
-out/runs/<task>/<dataset_key>/<timestamp>/
+outputs/runs/<task>/<dataset_key>/<timestamp>/
 ├── logs/                           # Full execution log
-├── phase2_data_understanding/
-├── phase3_data_preparation/
-├── phase4_data_modeling/
-└── phase5_evaluation_and_interpretation/
+├── runs/                           # Full execution runs
+    ├── task/                           # type problem: example: clustering
+        ├── dataset_key/                           # 
+            ├── timestamp/                           # 
+                ├── phase2_data_understanding/
+                ├── phase3_data_preparation/
+                ├── phase4_data_modeling/
+                └── phase5_evaluation_and_interpretation/
 ```

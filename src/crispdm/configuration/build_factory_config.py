@@ -224,7 +224,17 @@ class ConfigBuilder:
                 "-- keeping inline value",
                 read_strategy.sample_rows,
             )
+        # ──────────────────────────────────────────────────────
+        # Step 7: Build deterministic artifact names  ← New
+        # ──────────────────────────────────────────────────────
+        ConfigBuilder._inject_artifact_names(
+            pipeline_cfg,
+            profile,
+            active_profile,
+            read_strategy.get("sample_method", "random"),
+        )
 
+        # ──────────────────────────────────────────────────────
         log.info(
             "[_apply_profile_to_read_strategy] done -- mode=%s sample_rows=%d "
             "from profile='%s'",
@@ -264,6 +274,44 @@ class ConfigBuilder:
 
         return profile_cfg
 
+    @staticmethod
+    def _inject_artifact_names(
+            pipeline_cfg: DictConfig,
+            profile: DictConfig,
+            active_profile: str,
+            sample_method: str,
+    ) -> None:
+        """
+        Build deterministic artifact filenames encoding profile parameters
+        into phase2 output_artifacts so Phase 3 can resolve them via
+        OmegaConf interpolation.
+
+        Pattern: 2.1.data_acquisition.{profile}_{sample_rows}_{method}_{split}.parquet
+        Example: 2.1.data_acquisition.dev_7000_stratified_train.parquet
+        """
+        if "phase2_data_understanding" not in pipeline_cfg.phases:
+            return
+
+        phase2 = pipeline_cfg.phases.phase2_data_understanding
+
+        if "steps" not in phase2 or "step_2_1_data_acquisition" not in phase2.steps:
+            log.warning(
+                "[_inject_artifact_names] step_2_1_data_acquisition not found "
+                "after merge — skipping artifact name injection"
+            )
+            return
+
+        suffix = f"{active_profile}_{profile.sample_rows}_{sample_method}"
+        artifacts = phase2.steps.step_2_1_data_acquisition.output_artifacts
+
+        artifacts.sample_train_parquet = f"2.1.data_acquisition.{suffix}_train.parquet"
+        artifacts.sample_test_parquet  = f"2.1.data_acquisition.{suffix}_test.parquet"
+
+        log.info(
+            "[_inject_artifact_names] train=%s test=%s",
+            artifacts.sample_train_parquet,
+            artifacts.sample_test_parquet,
+        )
 
 def build_config(
         pipeline_name: str,
@@ -273,3 +321,4 @@ def build_config(
 
     log.info(f"build_config: pipeline={pipeline_name}, dataset={dataset_key}")
     return ConfigBuilder.build_pipeline_config(pipeline_name, dataset_key, notebook_vars)
+

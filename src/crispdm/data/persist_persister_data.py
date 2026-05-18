@@ -1,4 +1,4 @@
-# src/crispdm/data/persist_utils_data.py
+# src/crispdm/data/persist_persister_data.py
 from __future__ import annotations
 
 import json
@@ -11,68 +11,37 @@ import pandas as pd
 
 from crispdm.common.logging_adapter_common import get_logger
 from crispdm.common.path_service_common import resolve_path
+from crispdm.configuration.enum_registry_config import PhaseDir, StageSubDir
+from typing import Any
+from omegaconf import OmegaConf, DictConfig, ListConfig, Container  # <-- Importamos Container
 
-# Initialize logger.
+
 log = get_logger(__name__)
 
-# =============================================================================
-# Why this module exists
-# -----------------------------------------------------------------------------
-# Persistence utilities for intermediate pipeline artifacts.
-# Handles writing data and objects produced between phases to disk so the
-# next stage can consume them without re-running prior phases.
-#
-# Separating persistence from loading (load_utils_data.py) enforces the
-# Single Responsibility Principle: load_utils_data reads, this module writes.
-#
-# Option A intermediate artifacts:
-#   Stage 2 → sample_200k_with_source.parquet  (train + test, with source col)
-#   Stage 3 → train_prepared_150k.parquet      (train rows, transformed)
-#   Stage 3 → test_prepared_50k.parquet        (test rows, transformed)
-#   Stage 3 → train_incident_grade.npy         (train labels for validation)
-#   Stage 3 → test_incident_grade.npy          (test labels for validation)
-#   Stage 3 → transformers_pipeline.pkl        (fitted imputer/scaler/encoder)
-#   Stage 3 → 15× JSON reports                (feature selection, cleaning, etc.)
-#
-# Option B intermediate artifacts:
-#   Stage 2 → train_sample_200k.parquet        (train only, no source col)
-#   Stage 3 → train_prepared_200k.parquet      (train rows, transformed)
-#   Stage 3 → train_incident_grade.npy         (train labels for validation)
-#   Stage 3 → transformers_pipeline.pkl        (fitted imputer/scaler/encoder)
-#   Stage 3 → 15× JSON reports                (feature selection, cleaning, etc.)
-#
-# Program flow:
-# -----------------------------------------------------------------------------
-# - stage/stage2_* → calls save_parquet() after sampling train+test (A)
-#                    or sampling train only (B)
-# - stage/stage3_* → calls save_parquet() for prepared train and test parquets
-#                    calls save_numpy() for IncidentGrade labels (NEW)
-#                    calls save_json() for reports with naming convention (NEW)
-#                    calls save_pickle() for the fitted transformers pipeline
-# - stage/stage4_* → calls save_pickle() for trained models
-# - stage/stage5_* → reads artifacts (no writes in Stage 5)
-#
-# Design patterns
-# -----------------------------------------------------------------------------
-# - GoF: none
-# - Enterprise/Architectural:
-#   - Data Access Layer (thin): isolates all write I/O from business logic.
-#     No stage touches df.to_parquet() or pickle.dump() directly.
-#   - Repository (partial): centralises artifact persistence so paths and
-#     compression settings are never scattered across stage modules.
-#
-# NEW in Phase 3:
-# -----------------------------------------------------------------------------
-# - save_json(): Structured reports with naming convention
-#   {step}.{method}.{technique}.{filename}.json
-# - save_numpy(): NumPy arrays for IncidentGrade labels (post-hoc validation)
-# =============================================================================
 
+class _NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder that converts all numpy and OmegaConf types to native Python types."""
+    def default(self, obj: Any) -> Any:
+        # Primero: Si es un contenedor de OmegaConf (ListConfig/DictConfig), resolverlo a nativo
+        if isinstance(obj, Container):
+            return OmegaConf.to_container(obj, resolve=True)
 
-# =============================================================================
-# SECTION 1 - PARQUET PERSISTENCE
-# =============================================================================
+        # Lógica original para Numpy
+        if isinstance(obj, (np.generic,)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
 
+        return super().default(obj)
+
+def _convert_configs(obj: Any) -> Any:
+    if isinstance(obj, (DictConfig, ListConfig)):
+        return OmegaConf.to_container(obj, resolve=True)
+    if isinstance(obj, dict):
+        return {k: _convert_configs(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_configs(v) for v in obj]
+    return obj
 
 def save_parquet(
         df: pd.DataFrame,
@@ -183,11 +152,6 @@ def save_parquet(
     return resolved
 
 
-# =============================================================================
-# SECTION 2 - PICKLE PERSISTENCE
-# =============================================================================
-
-
 def save_pickle(
         obj: Any,
         path: str | Path,
@@ -286,93 +250,24 @@ def save_pickle(
     return resolved
 
 
-# =============================================================================
-# SECTION 3 - PICKLE LOADING
-# =============================================================================
+def save_model_pickle(
+        run_dir: Path,
+        model: Any,
+        filename: str = "model.pkl",
+) -> Path:
 
+    # Step 1 – Resolve destination path under the PhaseDir.MODELS sub-directory
+    out_path = run_dir / PhaseDir.MODELS.value / filename
 
-def load_pickle(
-        path: str | Path,
-) -> Any:
-    """
-    Load a pickled Python object from disk.
+    # Step 2 – Ensure the models directory exists (defensive mkdir guard)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    Used in Stage 5 to deserialise the fitted transformers pipeline written
-    by Stage 3 (``transformers_pipeline.pkl``) for on-the-fly application to
-    each 100k-row test chunk during full evaluation.
+    # Step 3 – Serialise model to bytes and write to disk
+    out_path.write_bytes(pickle.dumps(model))
 
-    Also used in Stage 5 to load trained models written by Stage 4
-    (``kmeans_best.pkl``, ``dbscan_best.pkl``) for cluster assignment.
-
-    Security note: only load pickle files from trusted pipeline artifact
-    directories. Never load pickles from external or user-supplied sources.
-
-    Covers: Option A and Option B -- both use transformers_pipeline.pkl
-    in Stage 5, though the transformers were fitted on different data:
-      Option A: fitted on train_rows (~150k) from the combined sample.
-      Option B: fitted on train_rows (200k) from the train-only sample.
-
-    Parameters
-    ----------
-    path : str | Path
-        Relative or absolute path to the ``.pkl`` file.
-        Resolved against the project root via ``resolve_path()``.
-
-    Returns
-    -------
-    Any
-        Deserialised Python object.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the resolved path does not exist.
-    Exception
-        Any ``pickle.load()`` exception is logged then re-raised.
-
-    Examples
-    --------
-    >>> transformers = load_pickle("out/runs/.../transformers_pipeline.pkl")
-    >>> kmeans = load_pickle("out/runs/.../models/kmeans_best.pkl")
-    """
-    # Step 1: Resolve path to absolute location.
-    resolved: Path = resolve_path(path)
-    log.debug("[load_pickle] resolved path=%s", resolved)
-
-    # Step 2: Validate file existence before attempting to load.
-    if not resolved.exists():
-        log.error("[load_pickle] pickle file not found path=%s", resolved)
-        raise FileNotFoundError(f"Pickle file not found: {resolved}")
-
-    # Step 3: Log file size before loading for memory awareness.
-    size_mb: float = resolved.stat().st_size / (1024**2)
-    log.info(
-        "[load_pickle] loading size_mb=%.3f path=%s",
-        size_mb,
-        resolved,
-    )
-
-    # Step 4: Deserialise object from disk.
-    try:
-        with resolved.open("rb") as fh:
-            obj: Any = pickle.load(fh)  # noqa: S301 (trusted pipeline artifacts only)
-
-    except Exception:
-        log.exception("[load_pickle] pickle.load failed path=%s", resolved)
-        raise
-
-    # Step 5: Log loaded object type for audit trail.
-    log.info(
-        "[load_pickle] loaded object_type=%s path=%s",
-        type(obj).__name__,
-        resolved,
-    )
-    return obj
-
-
-# =============================================================================
-# SECTION 4 - JSON PERSISTENCE
-# =============================================================================
+    # Step 4 – Emit info-level confirmation
+    log.info("[artifacts] model saved: %s", out_path)
+    return out_path
 
 
 def save_json(
@@ -474,7 +369,7 @@ def save_json(
             resolved,
         )
         with resolved.open("w", encoding="utf-8") as fh:
-            json.dump(obj, fh, indent=indent, ensure_ascii=False, sort_keys=False)
+            json.dump(_convert_configs(obj), fh, indent=indent, ensure_ascii=False, sort_keys=False, cls=_NumpyEncoder)
 
     except TypeError as err:
         log.error(
@@ -497,11 +392,6 @@ def save_json(
         resolved,
     )
     return resolved
-
-
-# =============================================================================
-# SECTION 5 - NUMPY PERSISTENCE
-# =============================================================================
 
 
 def save_numpy(

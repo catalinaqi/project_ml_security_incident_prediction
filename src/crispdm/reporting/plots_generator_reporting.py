@@ -1,4 +1,4 @@
-# src/crispdm/reporting/plots_utils_reporting.py
+# src/crispdm/reporting/plots_generator_reporting.py
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------

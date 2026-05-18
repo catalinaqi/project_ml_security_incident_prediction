@@ -6,17 +6,18 @@ from typing import Any, Optional
 
 import pandas as pd
 
+
 from crispdm.configuration.build_factory_config import build_config, BuiltConfig
 from crispdm.configuration.enum_registry_config import PhaseDir, StepsPhase
 from crispdm.common.context_facade_common import RunContext, create_run_context
 from crispdm.common.logging_adapter_common import get_logger
-from crispdm.phase.phase2_understanding_runner_stage import (
+from crispdm.phase.phase2_understanding_runner_phase import (
     run_data_description,
     run_data_quality_verification,
     run_exploratory_analysis,
     run_initial_data_collection,
 )
-
+from crispdm.phase.phase3_preparation_runner_phase import run_step_3_1
 log = get_logger(__name__)
 
 
@@ -160,14 +161,50 @@ def run_clustering_pipeline_phase2_4(ctx: ClusteringRunContext) -> ClusteringRun
 # PHASE 3 ORCHESTRATORS (STUBS)
 # =============================================================================
 
-
 def run_clustering_pipeline_phase3_1(ctx: ClusteringRunContext) -> ClusteringRunContext:
-    """Phase 3.1 - Data Selection (STUB)."""
+    """Phase 3.1 - Data Selection: read sample_train.parquet from Phase 2 and apply sentinel removal."""
     log.info("[3.1] START run_id=%s", ctx.run_id)
-    # ctx = run_data_selection(ctx)  # TODO: implement
-    log.info("[3.1] DONE (stub)")
-    return ctx
 
+    # -------------------------------------------------------
+    # 1. Resolve artifact filename from config (dynamic name)
+    # -------------------------------------------------------
+    try:
+        artifact_relative = ctx.config.phases.phase2_data_understanding.steps.step_2_1_data_acquisition.output_artifacts.sample_train_parquet
+    except (KeyError, AttributeError):
+        raise RuntimeError(
+            "[3.1] Cannot find 'output_artifacts.sample_train_parquet' in config. "
+            "Ensure Phase 2 step_2_1_data_acquisition is correctly configured."
+        )
+
+    sample_train_path = (
+            ctx.run_dir
+            / PhaseDir.PHASE2.value
+            / artifact_relative
+    )
+
+    # -------------------------------------------------------
+    # 2. Validate existence
+    # -------------------------------------------------------
+    if not sample_train_path.exists():
+        raise FileNotFoundError(
+            f"[3.1] Phase 2 artifact not found: {sample_train_path}. "
+            f"Ensure Phase 2.1 completed successfully."
+        )
+
+    # -------------------------------------------------------
+    # 3. Load parquet
+    # -------------------------------------------------------
+    ctx.df_train = pd.read_parquet(sample_train_path)
+    log.info("[3.1] loaded sample_train from %s shape=%s", sample_train_path, ctx.df_train.shape)
+
+    # -------------------------------------------------------
+    # 4. Execute step_3_1 (sentinel removal)
+    # -------------------------------------------------------
+
+    ctx = run_step_3_1(ctx)
+
+    log.info("[3.1] DONE train shape=%s", ctx.df_train.shape)
+    return ctx
 
 def run_clustering_pipeline_phase3_2(ctx: ClusteringRunContext) -> ClusteringRunContext:
     """Phase 3.2 - Data Cleaning (STUB)."""

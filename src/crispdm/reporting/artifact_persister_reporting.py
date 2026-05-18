@@ -1,4 +1,4 @@
-# src/crispdm/reporting/artifacts_service_reporting.py
+# src/crispdm/reporting/artifact_persister_reporting.py
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
@@ -27,70 +27,8 @@ from crispdm.common.path_service_common import resolve_path
 # ---------------------------------------------------------------------------
 log = get_logger(__name__)
 
-# =============================================================================
-# Why this module exists
-# -----------------------------------------------------------------------------
-# Persistence utilities for terminal pipeline artifacts.
-# Handles writing every human- or registry-facing output produced by phases
-# 2–5 to the correct sub-directory of a run folder created by
-# context_utils_core.make_run_dir().
-#
-# Separating terminal artifact persistence from intermediate data persistence
-# (persist_utils_data.py) enforces the Single Responsibility Principle:
-# persist_utils_data writes DataFrames consumed by the next stage;
-# this module writes outputs consumed by humans, MLflow, or audit logs.
-#
-# Option A terminal artifacts:
-#   Stage 2 → phase2_data_understanding/reports/profiling_report.json
-#   Stage 2 → phase2_data_understanding/figures/*.png
-#   Stage 2 → phase2_data_understanding/tables_png/*.png
-#   Stage 3 → phase3_data_preparation/reports/preparation_report.json
-#   Stage 3 → phase3_data_preparation/figures/*.png
-#   Stage 4 → models/model.pkl           (clustering + classification track)
-#   Stage 4 → phase4_data_modeling/reports/modeling_report.json
-#   Stage 5 → metrics.json
-#   Stage 5 → stage5_evaluation/reports/evaluation_report.json
-#   Stage 5 → stage5_evaluation/figures/*.png
-#
-# Option B terminal artifacts:
-#   Stage 2 → phase2_data_understanding/reports/profiling_report.json
-#   Stage 2 → phase2_data_understanding/figures/*.png
-#   Stage 3 → phase3_data_preparation/reports/preparation_report.json
-#   Stage 4 → models/model.pkl           (all four modelling tracks)
-#   Stage 4 → phase4_data_modeling/reports/modeling_report.json
-#   Stage 5 → metrics.json
-#   Stage 5 → stage5_evaluation/figures/*.png
-#   Stage 5 → stage5_evaluation/tables_png/*.png
-#
-# Program flow:
-# -----------------------------------------------------------------------------
-# - stage/stage2_* → calls save_figure(), save_table_png(), save_stage_report()
-#                    after profiling (options A and B share this)
-# - stage/stage3_* → calls save_figure(), save_stage_report()
-#                    for preparation summaries
-# - stage/stage4_* → calls save_model_pickle() for trained estimators
-#                    calls save_stage_report() for modeling summaries
-# - stage/stage5_* → calls save_metrics(), save_figure(), save_stage_report()
-#                    for evaluation outputs  (no parquet writes in Stage 5)
-#
-# Design patterns
-# -----------------------------------------------------------------------------
-# - GoF: none
-# - Enterprise / Architectural:
-#   - Artifact Repository (filesystem-based): centralises all terminal write
-#     I/O so paths, filenames, and DPI settings are never scattered across
-#     stage modules.  No stage calls fig.savefig() or pickle.dump() directly.
-#   - Convention over Configuration: directory layout is driven by PhaseDir
-#     and StageSubDir enums; filenames are supplied by the caller from YAML
-#     configuration, never hardcoded inside this module.
-# =============================================================================
 
-# =============================================================================
-# SECTION 5 – JSON / metrics helpers
-# =============================================================================
-
-
-def save_json(
+def _save_json(
         path: Path,
         payload: dict[str, Any],
 ) -> Path:
@@ -151,13 +89,8 @@ def save_metrics(
     # Step 1 – Resolve the canonical metrics file path at the run root
     out_path = run_dir / StageSubDir.METRICS.value
 
-    # Step 2 – Delegate serialisation to save_json
-    return save_json(out_path, metrics)
-
-
-# =============================================================================
-# SECTION 6 – Stage report helper
-# =============================================================================
+    # Step 2 – Delegate serialisation to _save_json
+    return _save_json(out_path, metrics)
 
 
 def save_stage_report(
@@ -191,13 +124,8 @@ def save_stage_report(
     # Step 1 – Build destination path using the StageSubDir.REPORTS convention
     report_path = run_dir / stage_name / StageSubDir.REPORTS.value / filename
 
-    # Step 2 – Delegate serialisation to save_json
-    return save_json(report_path, payload)
-
-
-# =============================================================================
-# SECTION 7 – Table-as-PNG helper
-# =============================================================================
+    # Step 2 – Delegate serialisation to _save_json
+    return _save_json(report_path, payload)
 
 
 def save_table_png(
@@ -285,11 +213,6 @@ def save_table_png(
     return out_path
 
 
-# =============================================================================
-# SECTION 8 – Figure helper
-# =============================================================================
-
-
 def save_figure(
         fig: plt.Figure,
         *,
@@ -326,46 +249,3 @@ def save_figure(
     log.info("[artifacts] figure saved: %s", out_path)
     return out_path
 
-
-# =============================================================================
-# SECTION 9 – Model serialisation helper
-# =============================================================================
-
-
-def save_model_pickle(
-        run_dir: Path,
-        model: Any,
-        filename: str = "model.pkl",
-) -> Path:
-    """Persist a scikit-learn-compatible model via pickle.
-
-    Writes the serialised model to ``<run_dir>/models/<filename>``.
-    The ``models/`` sub-directory is created if absent (defensive guard
-    in case ``make_run_dir()`` was not called by the pipeline runner).
-
-    Parameters
-    ----------
-    run_dir:
-        Root of the current pipeline run.
-    model:
-        Any picklable object (typically a fitted ``Pipeline`` or estimator).
-    filename:
-        Target filename inside ``models/``; defaults to ``"model.pkl"``.
-
-    Returns
-    -------
-    Path
-        Absolute path of the written pickle file.
-    """
-    # Step 1 – Resolve destination path under the PhaseDir.MODELS sub-directory
-    out_path = run_dir / PhaseDir.MODELS.value / filename
-
-    # Step 2 – Ensure the models directory exists (defensive mkdir guard)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Step 3 – Serialise model to bytes and write to disk
-    out_path.write_bytes(pickle.dumps(model))
-
-    # Step 4 – Emit info-level confirmation
-    log.info("[artifacts] model saved: %s", out_path)
-    return out_path

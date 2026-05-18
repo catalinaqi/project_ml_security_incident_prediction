@@ -38,8 +38,11 @@ pipeline_base:
 
   common_phases_config:
     phases:
-      #"Describe, DON'T transform. Alert, DON'T correct."
-      #"Describe, DO NOT transform. Alert, DO NOT remediate."
+      # ════════════════════════════════════════════════════════════════════════════
+      # PHASE 2: DATA UNDERSTANDING (Executed by base_pipeline)
+      # "Describe, DON'T transform. Alert, DON'T correct."
+      # "Describe, DO NOT transform. Alert, DO NOT remediate."
+      # ════════════════════════════════════════════════════════════════════════════
       phase2_data_understanding:
         enabled: true
         objective: "Lightweight profiling with critical validations - no heavy computation"
@@ -200,8 +203,8 @@ pipeline_base:
                       report_null_percentages: true
                     output: "2.2.special_feature_detection.entity_conditional_sparsity.json"
             output_artifacts:
-              schema_summary: "2.2.schema_summary.json"
-              statistics_summary: "2.2.statistics_summary.json"
+              schema_summary: "2.2.data_description.schema_summary.json"
+              statistics_summary: "2.2.data_description.statistics_summary.json"
 
           step_2_3_data_quality_assessment:
             enabled: true
@@ -338,8 +341,8 @@ pipeline_base:
                       sample_rows: 50000
                     output: "2.4.visual_eda.target_by_category.png"
             output_artifacts:
-              exploratory_summary: "2.4.visual_eda.exploratory_summary.json"
-              phase2_report: "2.4.phase2_summary_report.json"
+              exploratory_summary: "2.4.data_exploration.exploratory_summary.json"
+              phase2_report: "2.4.data_exploration.phase2_report.json"
 
         critical_warnings:
           exclude_incidentgrade_none:

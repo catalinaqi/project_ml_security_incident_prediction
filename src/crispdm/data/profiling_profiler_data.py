@@ -1,4 +1,4 @@
-# src/crispdm/data/profiling_utils_data.py
+# src/crispdm/data/profiling_profiler_data.py
 from __future__ import annotations
 
 # =============================================================================

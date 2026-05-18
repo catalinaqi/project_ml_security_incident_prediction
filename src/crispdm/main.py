@@ -1,3 +1,4 @@
+# src/crispdm/main.py
 import argparse
 import logging
 import sys
@@ -9,14 +10,15 @@ from crispdm.api.execution_facade_api import (
     run_phase2_2,
     run_phase2_3,
     run_phase2_4,
+    run_phase3_1,
 )
 from crispdm.common.path_service_common import find_project_root
 
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="crisp-dm-phase2",
-        description="CRISP-DM Phase 2 - Data Understanding",
+        prog="crisp-dm-pipeline",
+        description="CRISP-DM Pipeline - Phase 2 (Data Understanding) + Phase 3.1 (Data Selection)",
     )
 
     parser.add_argument(
@@ -64,7 +66,8 @@ def main():
 
     logger = logging.getLogger("crisp-dm.main")
     logger.info("=" * 70)
-    logger.info("CRISP-DM PHASE 2 - DATA UNDERSTANDING")
+    logger.info("CRISP-DM PIPELINE")
+    logger.info("Phase 2 (Data Understanding) + Phase 3.1 (Data Selection)")
     logger.info("=" * 70)
     logger.info(f"Project root: {project_root}")
     logger.info(f"Output root: {output_root}")
@@ -83,6 +86,7 @@ def main():
         sys.exit(0)
 
     try:
+        # ── Phase 2 ──────────────────────────────────────────────────────
         logger.info("\n" + "-" * 70)
         logger.info("Step 2.0: Initializing run context")
         logger.info("-" * 70)
@@ -124,9 +128,19 @@ def main():
         logger.info("\n" + "=" * 70)
         logger.info("PHASE 2 COMPLETED SUCCESSFULLY")
         logger.info("=" * 70)
+
+        # ── Phase 3.1 ────────────────────────────────────────────────────
+        logger.info("\n" + "-" * 70)
+        logger.info("Step 3.1: Data Selection (Sentinel Removal)")
+        logger.info("-" * 70)
+        ctx = run_phase3_1(ctx)
+        if ctx.df_train is not None:
+            logger.info(f"Train data after Phase 3.1: {len(ctx.df_train):,} rows x {len(ctx.df_train.columns)} cols")
+
+        logger.info("\n" + "=" * 70)
+        logger.info("PIPELINE EXECUTED SUCCESSFULLY (Phase 2 + Phase 3.1)")
+        logger.info("=" * 70)
         logger.info(f"Run directory: {ctx.run_dir}")
-        logger.info(f"Artifacts: {len(ctx.artifacts) if hasattr(ctx, 'artifacts') else 'N/A'}")
-        logger.info(f"Errors: {len(ctx.errors) if hasattr(ctx, 'errors') else 'N/A'}")
 
         sys.exit(0)
 

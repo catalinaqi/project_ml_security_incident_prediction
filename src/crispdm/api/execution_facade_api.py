@@ -7,14 +7,19 @@ from crispdm.configuration.enum_registry_config import ProblemType, normalize_pr
 from crispdm.configuration.yml_repository_config import YmlRepository
 from crispdm.common.context_facade_common import RunContext, create_run_context
 from crispdm.common.logging_adapter_common import config_run_logging, get_logger
-from crispdm.data.download_utils_data import download_microsoft_dataset
-
+from crispdm.data.download_extractor_data import download_microsoft_dataset
+from crispdm.pipeline.clustering_runner_pipeline import (
+    ClusteringRunContext,
+    create_clustering_context,
+    run_clustering_pipeline_phase2_1,
+    run_clustering_pipeline_phase3_1,   # <--- NEW
+)
 from crispdm.pipeline.clustering_runner_pipeline import (
     ClusteringRunContext,
     create_clustering_context,
     run_clustering_pipeline_phase2_1,
 )
-from crispdm.phase.phase2_understanding_runner_stage import (
+from crispdm.phase.phase2_understanding_runner_phase import (
     run_data_description,
     run_data_quality_verification,
     run_exploratory_analysis,
@@ -311,5 +316,79 @@ def _dispatch_pipeline_phase2_4(ctx: RunContext) -> RunContext:
     raise NotImplementedError(
         f"[_dispatch_pipeline_phase2_4] task={ctx.task!r} pipeline not yet "
         f"implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+# =============================================================================
+# PHASE 3 DISPATCHERS
+# =============================================================================
+
+def run_phase3_1(ctx: RunContext) -> RunContext:
+    """Run Phase 3.1 - Data Selection (sentinel removal).
+
+    Reads sample_train.parquet from Phase 2 and applies sentinel removal
+    (bigint_cleanup).  Dispatches to the pipeline-specific runner.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata. Must have
+        ``run_dir`` pointing to the completed Phase 2 output.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 3.1.
+
+    Raises
+    ------
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    log.info("[run_phase3_1] start task=%s run_id=%s", ctx.task, ctx.run_id)
+    ctx = _dispatch_pipeline_phase3_1(ctx)
+    log.info("[run_phase3_1] done df_train_shape=%s",
+             ctx.df_train.shape if ctx.df_train is not None else None)
+    return ctx
+
+
+def _dispatch_pipeline_phase3_1(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 3.1 to the correct pipeline runner by ``ctx.task``.
+
+    For clustering, wraps the generic ``RunContext`` into a
+    ``ClusteringRunContext`` and calls ``run_clustering_pipeline_phase3_1``.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 3.1.
+
+    Raises
+    ------
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    if ctx.task == ProblemType.CLUSTERING.value:
+        # Wrap generic RunContext into ClusteringRunContext for consistency
+        clustering_ctx = ClusteringRunContext(
+            config=ctx.config,
+            run_dir=ctx.run_dir,
+            run_id=ctx.run_id,
+            dataset_key=ctx.dataset_key,
+            df_train=ctx.df_train,
+            df_test=ctx.df_test,
+            artifacts=ctx.artifacts,
+            phase_results=ctx.phase_results,
+            errors=ctx.errors,
+        )
+        return run_clustering_pipeline_phase3_1(clustering_ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase3_1] task={ctx.task!r} pipeline not yet implemented. "
         f"Valid tasks: {[m.value for m in ProblemType]}"
     )

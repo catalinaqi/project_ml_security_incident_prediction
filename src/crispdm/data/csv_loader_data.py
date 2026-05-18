@@ -1,8 +1,7 @@
-# src/crispdm/data/load_utils_data.py
+# src/crispdm/data/load_loader_data.py
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
 
@@ -11,437 +10,10 @@ import pandas as pd
 from crispdm.configuration.enum_registry_config import ReadMode, normalize_read_mode
 from crispdm.common.logging_adapter_common import get_logger
 from crispdm.common.path_service_common import resolve_path
+from crispdm.configuration.read_strategy_repository_config import ReadStrategyContract
 
-# Initialize logger.
+import inspect
 log = get_logger(__name__)
-
-# =============================================================================
-# Why this module exists
-# -----------------------------------------------------------------------------
-# Data loading utilities for the CRISP-DM pipeline.
-# Provides a unified, strategy-driven interface for loading CSV and Parquet
-# files across all pipeline phases (2-5) and for both pipeline options.
-#
-# Option A (drift-aware):
-#   Stage 2 — loads train + test combined, adds 'source' column, samples 200k.
-#   Stage 3 — reads sample parquet, splits by 'source', fits transformers on
-#             train rows (~150k), applies to both train and test rows.
-#   Stage 4 — reads train_prepared_150k.parquet (train only).
-#   Stage 5 — quick eval on test_prepared_50k.parquet +
-#             full eval on GUIDE_Test.csv (chunked, 100k/iter).
-#
-# Option B (train-only):
-#   Stage 2 — loads train CSV only, samples 200k (no source column).
-#   Stage 3 — reads train_sample_200k.parquet, fits and applies on train (200k).
-#   Stage 4 — reads train_prepared_200k.parquet (train only).
-#   Stage 5 — full eval on GUIDE_Test.csv (chunked, 100k/iter). No quick eval.
-#
-# The read_strategy block in each pipeline YAML is the single source of truth
-# that drives all loading decisions. No code changes are needed when switching
-# between Option A and Option B, or between clustering / classification /
-# regression / timeseries pipelines — only YAML values change.
-#
-# YAML structure per stage:
-# -----------------------------------------------------------------------------
-#   Stage 2: has dataset_input (source_type, train_path, test_path)
-#            with read_strategy nested inside dataset_input.
-#            → Requires DataSourceConfig (wraps ReadStrategyContract).
-#
-#   Stages 3-5: have ONLY read_strategy at stage level (no dataset_input).
-#               Input paths are inside read_strategy via input_source,
-#               input_source_sample, input_source_full.
-#               → Require ReadStrategyContract only.
-#
-# Program flow:
-# -----------------------------------------------------------------------------
-# - YAML pipeline configuration  → read_strategy block (+ dataset_input for Stage 2)
-# - pipeline/* or stage/* → builds ReadStrategyContract from YAML dict
-# - Stage 2 only          → builds DataSourceConfig wrapping the contract
-# - stage/*               → calls load_* public functions with the contract
-# - load_* functions      → dispatch to private CSV / Parquet primitives
-# - primitives            → return DataFrame or Generator[DataFrame]
-#
-# Design patterns
-# -----------------------------------------------------------------------------
-# - GoF -> Gang of Four:
-#   - Strategy: load_by_strategy() dispatches to the correct CSV primitive
-#               based on ReadStrategyContract.mode (sample | chunked | full).
-#               Each mode maps to a different private function, selected at
-#               runtime without conditionals in the caller.
-#   - Factory Method: ReadStrategyContract.from_dict() and
-#               DataSourceConfig.from_dict() create immutable contracts
-#               from raw YAML dicts without exposing constructors directly.
-# - DDD -> Domain-Driven Design:
-#   - Value Object: ReadStrategyContract and DataSourceConfig are frozen
-#               dataclasses -- immutable, equality by value, no identity.
-#               They represent the YAML contract as a typed Python object.
-# - Enterprise/Architectural:
-#   - Data Access Layer (thin):
-#       -   Isolates all CSV/Parquet I/O from business logic in stage/* and pipeline/*.
-#         No stage touches pd.read_csv directly -- all I/O goes through this module.
-#   - Contract / DTO:
-#       -   ReadStrategyContract maps the YAML read_strategy block 1-to-1 and is the
-#           single source of truth for loading behaviour across all phases, options,
-#           and pipeline types.
-# =============================================================================
-
-
-# =============================================================================
-# SECTION 1 — DATACLASSES (contracts)
-# =============================================================================
-
-
-@dataclass(frozen=True)
-class ReadStrategyContract:
-    """
-    Immutable contract parsed from the ``read_strategy`` block of a pipeline YAML.
-
-    Every field maps 1-to-1 to a YAML key. The YAML is the single source of
-    truth — no defaults are applied in code. Missing required fields raise
-    ``KeyError`` immediately so misconfiguration fails at startup, not silently
-    mid-run.
-
-    Used for all pipeline types (clustering, classification, regression,
-    timeseries) and for both Option A and Option B across all phases.
-
-    Stage-by-stage value summary
-    ----------------------------
-    .. code-block:: text
-
-        Field                    Stage2-A  Stage2-B  Stage3     Stage4     Stage5
-        -------------------------------------------------------------------------
-        mode                     sample    sample    sample     sample     chunked
-        sample_rows              200_000   200_000   200_000    150_000    null
-        sample_method            random    random    random     random     null
-        random_state             7         7         7          7          null
-        chunksize                100_000   100_000   100_000    100_000    100_000
-        combine_before_sampling  True      False     False      False      False
-        add_source_column        True      False     False      False      False
-        input_source             null      null      *.parquet  *.parquet  null
-        input_source_sample      null      null      null       null       A:*.pq
-        input_source_full        null      null      null       null       *.csv
-
-    Parameters
-    ----------
-    mode : ReadMode
-        Reading strategy: ``sample`` | ``chunked`` | ``full``.
-    sample_rows : int
-        Number of rows when ``mode="sample"``.
-    sample_method : str
-        Sampling algorithm: ``random`` | ``head`` | ``tail``.
-    chunksize : int
-        Rows per iteration when ``mode="chunked"``.
-    random_state : int
-        Reproducibility seed for random sampling.
-    combine_before_sampling : bool
-        **Option A — Stage 2 only.**
-        ``True``: train and test CSVs are concatenated before sampling.
-        ``False`` (Option B): only train CSV is loaded.
-    add_source_column : bool
-        **Option A — Stage 2 only.**
-        ``True``: ``'source'`` column (``'train'``/``'test'``) added before
-        concat to enable drift detection (Stage 2) and row filtering (Stage 3).
-        ``False`` (Option B): no column added.
-    input_source : Optional[str]
-        **Stages 3 and 4.**
-        Path to intermediate Parquet from previous stage.
-        ``None`` for Stage 2 (reads raw CSV) and Stage 5.
-    input_source_sample : Optional[str]
-        **Stage 5 — Option A only.**
-        Pre-prepared test Parquet for quick evaluation (seconds).
-        ``None`` for Option B (no quick eval path).
-    input_source_full : Optional[str]
-        **Stage 5 — both options.**
-        Full raw test CSV for chunked evaluation (minutes).
-    """
-
-    # Core reading parameters — all phases, both options
-    mode: ReadMode
-    sample_rows: int
-    sample_method: str
-    stratify_column: str
-    chunksize: int
-    random_state: int
-
-    # Combination and source-tracking — Stage 2, Option A specific
-    combine_before_sampling: bool  # Option A=True  | Option B=False
-    add_source_column: bool  # Option A=True  | Option B=False
-
-    # Intermediate input paths — Stages 3-5
-    input_source: Optional[str]  # Stage 3-4 parquet
-    input_source_sample: Optional[str]  # Stage 5 quick eval (Option A only)
-    input_source_full: Optional[str]  # Stage 5 full eval (both options)
-
-    @classmethod
-    def from_dict(
-            cls,
-            raw: dict[str, Any],
-    ) -> "ReadStrategyContract":  # noqa: UP006
-        """
-        Build a ``ReadStrategyContract`` from a raw YAML ``read_strategy`` dict.
-
-        The YAML is the single source of truth — all required fields must be
-        present. Optional fields may be absent or ``null`` in the YAML.
-        Raises ``KeyError`` for missing required fields.
-
-        Covers: Option A and Option B — same factory for every stage.
-
-        Parameters
-        ----------
-        raw : dict
-            Dictionary from the YAML ``read_strategy`` block of a stage.
-
-        Returns
-        -------
-        ReadStrategyContract
-            Fully populated, immutable contract.
-
-        Raises
-        ------
-        KeyError
-            If any required field is absent from *raw*.
-        ValueError
-            If ``mode`` is not a recognised ``ReadMode`` value.
-        """
-        # Step 1: Log raw keys for traceability before any parsing.
-        log.debug(
-            "[ReadStrategyContract.from_dict] raw keys=%s",
-            list(raw.keys()),
-        )
-
-        # Step 2: Parse mode — raises ValueError for unrecognised values.
-        mode: ReadMode = normalize_read_mode(raw["mode"])
-
-        # Step 3: Extract required integer fields.
-        # Raises KeyError if any field is absent — YAML must declare them all.
-        sample_rows: int = int(raw["sample_rows"])
-        chunksize: int = int(raw["chunksize"])
-        random_state: int = int(raw["random_state"])
-
-        # Step 4: Extract required string field.
-        sample_method: str = str(raw["sample_method"])
-
-        stratify_column: str = str(raw["stratify_column"])
-
-        # Step 5: Extract required boolean flags.
-        # These are the structural difference between Option A and Option B.
-        combine_before_sampling: bool = bool(raw["combine_before_sampling"])
-        add_source_column: bool = bool(raw["add_source_column"])
-
-        # Step 6: Extract optional path fields — None when absent or null.
-        # Stages 3-4 set input_source; Stage 5 sets input_source_sample/full.
-        input_source: Optional[str] = raw.get("input_source") or None
-        input_source_sample: Optional[str] = raw.get("input_source_sample") or None
-        input_source_full: Optional[str] = raw.get("input_source_full") or None
-
-        # Step 7: Log fully resolved values to aid YAML misconfiguration debugging.
-        log.info(
-            "[ReadStrategyContract.from_dict] resolved — "
-            "mode=%s sample_rows=%d sample_method=%s stratify_column=%s chunksize=%d "
-            "random_state=%d combine=%s add_source=%s "
-            "input_source=%s input_source_sample=%s input_source_full=%s",
-            mode.value,
-            sample_rows,
-            sample_method,
-            stratify_column,
-            chunksize,
-            random_state,
-            combine_before_sampling,
-            add_source_column,
-            input_source,
-            input_source_sample,
-            input_source_full,
-        )
-
-        # Step 8: Build and return the immutable contract.
-        return cls(
-            mode=mode,
-            sample_rows=sample_rows,
-            sample_method=sample_method,
-            stratify_column=stratify_column,
-            chunksize=chunksize,
-            random_state=random_state,
-            combine_before_sampling=combine_before_sampling,
-            add_source_column=add_source_column,
-            input_source=input_source,
-            input_source_sample=input_source_sample,
-            input_source_full=input_source_full,
-        )
-
-
-@dataclass(frozen=True)
-class DataSourceConfig:
-    """
-    Immutable configuration parsed from the ``dataset_input`` block of Stage 2.
-
-    **Only Stage 2 has a ``dataset_input`` block.**
-    Stages 3-5 declare their input paths inside ``read_strategy``
-    (``input_source``, ``input_source_sample``, ``input_source_full``)
-    and use ``ReadStrategyContract`` directly — no ``DataSourceConfig`` needed.
-
-    Encapsulates *what* to load (source type and CSV paths) together with
-    *how* to load it (``ReadStrategyContract``). Passed as a single unit
-    to Stage 2 loading functions.
-
-    Parameters
-    ----------
-    source_type : str
-        Dataset origin for Stage 2:
-
-        - ``"csv_combined"`` **(Option A)**: train and test CSVs are loaded
-          together, combined, ``'source'`` column added, 200k rows sampled
-          from both to enable drift detection in Stage 2 and source-based
-          filtering in Stage 3.
-        - ``"csv_separate"`` **(Option B)**: only ``train_path`` is loaded
-          and sampled. Test is not seen until Stage 5 (chunked evaluation).
-
-    train_path : str
-        Path to the training CSV. Required for both options.
-    test_path : Optional[str]
-        Path to the test CSV.
-        Required for Option A (``csv_combined``).
-        ``None`` for Option B — test is deferred to Stage 5.
-    strategy : ReadStrategyContract
-        Reading contract from the ``read_strategy`` block nested inside
-        ``dataset_input`` (Stage 2 structure).
-    """
-
-    source_type: str  # "csv_combined" (A) | "csv_separate" (B)
-    train_path: str  # required for both options
-    test_path: Optional[str]  # Option A=present | Option B=None
-    strategy: ReadStrategyContract
-
-    @classmethod
-    def from_dict(
-            cls,
-            dataset_input: dict[str, Any],
-    ) -> "DataSourceConfig":  # noqa: UP006
-        """
-        Build a ``DataSourceConfig`` from the raw YAML ``dataset_input`` dict.
-
-        The ``read_strategy`` block must be nested inside ``dataset_input``
-        (Stage 2 structure). Raises ``KeyError`` for missing required fields
-        and ``ValueError`` for unsupported ``source_type`` values.
-
-        Covers: Option A (``csv_combined``) and Option B (``csv_separate``).
-
-        Parameters
-        ----------
-        dataset_input : dict
-            Dictionary from the YAML ``dataset_input`` block of Stage 2,
-            containing ``source_type``, ``train_path``, optionally
-            ``test_path``, and the nested ``read_strategy`` dict.
-
-        Returns
-        -------
-        DataSourceConfig
-            Fully populated, immutable source configuration.
-
-        Raises
-        ------
-        KeyError
-            If ``source_type``, ``train_path``, ``read_strategy``, or any
-            required ``read_strategy`` field is absent.
-        ValueError
-            If ``source_type`` is not ``"csv_combined"`` or ``"csv_separate"``.
-        """
-        # Step 1: Log raw keys for traceability.
-        log.debug(
-            "[DataSourceConfig.from_dict] raw keys=%s",
-            list(dataset_input.keys()),
-        )
-
-        # Step 2: Extract and validate source_type.
-        # Parquet and other formats are not valid here — Stage 2 always reads CSV.
-        source_type: str = str(dataset_input["source_type"])
-        _valid: set[str] = {"csv_combined", "csv_separate"}
-        if source_type not in _valid:
-            log.error(
-                "[DataSourceConfig.from_dict] unsupported source_type='%s' "
-                "— valid values for Stage 2: %s. "
-                "Parquet inputs for Stages 3-5 are declared via "
-                "read_strategy.input_source, not here.",
-                source_type,
-                _valid,
-            )
-            raise ValueError(
-                f"Unsupported source_type='{source_type}'. "
-                f"Stage 2 only supports {_valid}. "
-                f"Parquet inputs (Stages 3-5) go in read_strategy.input_source."
-            )
-
-        # Step 3: Extract train_path — required for both options.
-        train_path: str = str(dataset_input["train_path"])
-
-        # Step 4: Extract test_path — required for Option A, absent for Option B.
-        test_path: Optional[str] = dataset_input.get("test_path") or None
-
-        # Step 5: Validate Option A consistency.
-        if source_type == "csv_combined" and test_path is None:
-            log.error(
-                "[DataSourceConfig.from_dict] source_type='csv_combined' "
-                "(Option A) requires test_path — it is null or absent. "
-                "Stage 2 drift detection cannot proceed."
-            )
-            raise KeyError(
-                "source_type='csv_combined' (Option A) requires 'test_path' "
-                "in dataset_input but it is null or absent."
-            )
-
-        # Step 6: Log Option B intent — test is intentionally deferred.
-        if source_type == "csv_separate":
-            log.info(
-                "[DataSourceConfig.from_dict] source_type='csv_separate' "
-                "(Option B) — test data deferred to Stage 5 chunked evaluation. "
-                "No drift detection performed in Stage 2."
-            )
-
-        # Step 7: Build ReadStrategyContract from the nested read_strategy block.
-        strategy: ReadStrategyContract = ReadStrategyContract.from_dict(
-            dataset_input["read_strategy"]
-        )
-
-        # Step 8: Log final resolved configuration.
-        log.info(
-            "[DataSourceConfig.from_dict] resolved — "
-            "source_type=%s train_path=%s test_path=%s "
-            "mode=%s combine=%s add_source=%s",
-            source_type,
-            train_path,
-            test_path,
-            strategy.mode.value,
-            strategy.combine_before_sampling,
-            strategy.add_source_column,
-        )
-
-        # Step 9: Build and return the immutable configuration.
-        return cls(
-            source_type=source_type,
-            train_path=train_path,
-            test_path=test_path,
-            strategy=strategy,
-        )
-
-
-# =============================================================================
-# SECTION 2 — PRIVATE CSV PRIMITIVES
-# =============================================================================
-# All functions in this section are internal to this module (prefix _).
-# They are thin I/O wrappers: no business logic, no strategy decisions.
-# Strategy decisions (which function to call) are made by the public
-# dispatcher load_by_strategy() in Section 3.
-#
-# Called exclusively by load_by_strategy() and load_csv_combined().
-#
-# Coverage:
-#   _load_csv_head()          → both options, all phases (head sampling)
-#   _load_csv_random_sample() → both options, all phases (random sampling)
-#   _load_csv_chunks()        → both options, Stage 5 (chunked evaluation)
-#   _load_csv_full()          → both options (use with caution on large files)
-#   _add_source_column()      → Option A only, Stage 2
-#   _sample_combined()        → Option A only, Stage 2
-# =============================================================================
-
 
 def _load_csv_head(
         path: str,
@@ -499,6 +71,9 @@ def _load_csv_head(
         json.dumps({k: str(v) for k, v in params.items()}, ensure_ascii=False),
     )
 
+    # update for solution read csv
+    params_filtered = _filter_read_csv_kwargs(params)
+
     # Step 3: Load first N rows — granular error handling for clear diagnostics.
     try:
         log.info(
@@ -506,7 +81,8 @@ def _load_csv_head(
             sample_rows,
             resolved,
         )
-        df: pd.DataFrame = pd.read_csv(resolved, nrows=sample_rows, **params)
+        #df: pd.DataFrame = pd.read_csv(resolved, nrows=sample_rows, **params)
+        df: pd.DataFrame = pd.read_csv(resolved, nrows=sample_rows, **params_filtered)
 
     except FileNotFoundError:
         log.error("[_load_csv_head] file not found path=%s", resolved)
@@ -621,8 +197,11 @@ def _load_csv_random_sample(
         sample_rows,
     )
 
+    # update for solution read csv
+    params_filtered = _filter_read_csv_kwargs(params)
+
     try:
-        for chunk in pd.read_csv(resolved, chunksize=chunksize, **params):
+        for chunk in pd.read_csv(resolved, chunksize=chunksize, **params_filtered):
             rows_seen += len(chunk)
 
             # Take at most sample_rows rows from each chunk proportionally.
@@ -748,7 +327,11 @@ def _load_csv_stratified_sample(
         resolved,
         chunksize,
     )
-    reader = pd.read_csv(resolved, chunksize=chunksize, **params)
+
+    # update for solution read csv
+    params_filtered = _filter_read_csv_kwargs(params)
+
+    reader = pd.read_csv(resolved, chunksize=chunksize, **params_filtered)
 
     # Fetch the first chunk manually.
     try:
@@ -960,7 +543,11 @@ def _load_csv_chunks(
             resolved,
             chunksize,
         )
-        reader = pd.read_csv(resolved, chunksize=chunksize, **params)
+
+        # update for solution read csv
+        params_filtered = _filter_read_csv_kwargs(params)
+
+        reader = pd.read_csv(resolved, chunksize=chunksize, **params_filtered)
 
     except Exception:
         log.exception(
@@ -1056,7 +643,11 @@ def _load_csv_full(
             resolved,
             file_size_mb,
         )
-        df: pd.DataFrame = pd.read_csv(resolved, **params)
+
+        # update for solution read csv
+        params_filtered = _filter_read_csv_kwargs(params)
+
+        df: pd.DataFrame = pd.read_csv(resolved, **params_filtered)
 
     except Exception:
         log.exception("[_load_csv_full] read_csv failed path=%s", resolved)
@@ -1070,281 +661,6 @@ def _load_csv_full(
         resolved,
     )
     return df
-
-
-# =============================================================================
-# SECTION 3 — PRIVATE HELPERS (Option A Stage 2 specific)
-# =============================================================================
-
-
-def _add_source_column(
-        df: pd.DataFrame,
-        source_value: str,
-) -> pd.DataFrame:
-    """
-    Add a ``'source'`` column to a DataFrame to mark its dataset origin.
-
-    **Option A — Stage 2 only.**
-    Called once for the train DataFrame (``source_value="train"``) and once
-    for the test DataFrame (``source_value="test"``) before concatenation.
-    The resulting ``'source'`` column enables:
-
-    - Drift detection in Stage 2 (compare distributions by source).
-    - Row filtering in Stage 3 (separate df_train ≈ 150k and df_test ≈ 50k).
-
-    Not called in Option B (no source tracking needed).
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame to annotate. Modified in place is avoided —
-        a copy is returned to keep the function side-effect-free.
-    source_value : str
-        Label to assign to every row: ``"train"`` or ``"test"``.
-
-    Returns
-    -------
-    pd.DataFrame
-        New DataFrame identical to *df* with an additional ``'source'``
-        column containing ``source_value`` for every row.
-
-    Raises
-    ------
-    ValueError
-        If ``source_value`` is not ``"train"`` or ``"test"``.
-    """
-    # Step 1: Validate source_value — only 'train' and 'test' are allowed.
-    _valid_sources = {"train", "test"}
-    if source_value not in _valid_sources:
-        log.error(
-            "[_add_source_column] invalid source_value='%s' — expected %s",
-            source_value,
-            _valid_sources,
-        )
-        raise ValueError(
-            f"source_value='{source_value}' is not valid. "
-            f"Expected one of {_valid_sources}."
-        )
-
-    # Step 2: Warn if 'source' column already exists — prevents silent overwrite.
-    if "source" in df.columns:
-        log.warning(
-            "[_add_source_column] 'source' column already exists — "
-            "overwriting with source_value='%s' rows=%d",
-            source_value,
-            len(df),
-        )
-
-    # Step 3: Assign the source column and return a new DataFrame.
-    log.debug(
-        "[_add_source_column] adding source='%s' to rows=%d",
-        source_value,
-        len(df),
-    )
-    result: pd.DataFrame = df.assign(source=source_value)
-
-    log.info(
-        "[_add_source_column] done source='%s' rows=%d cols=%d",
-        source_value,
-        len(result),
-        result.shape[1],
-    )
-    return result
-
-
-def _sample_combined(
-        df_train: pd.DataFrame,
-        df_test: pd.DataFrame,
-        *,
-        sample_rows: int,
-        random_state: int,
-) -> pd.DataFrame:
-    """
-    Combine train and test DataFrames and draw a stratified random sample.
-
-    **Option A — Stage 2 only.**
-    Implements the common of the Option A data strategy:
-
-    1. Both DataFrames must already have a ``'source'`` column
-       (added by ``_add_source_column()`` before this call).
-    2. Concatenates train + test into one combined DataFrame (≈ 19M rows
-       for GUIDE: 13M train + 6M test).
-    3. Draws ``sample_rows`` random rows from the combined DataFrame so that
-       both datasets are proportionally represented (≈ 150k train, ≈ 50k test
-       for a 200k sample from a 13M/6M split).
-
-    The proportional representation is a natural consequence of random sampling
-    from the combined DataFrame — no explicit stratification is applied.
-
-    Not called in Option B (train is sampled independently).
-
-    Parameters
-    ----------
-    df_train : pd.DataFrame
-        Train DataFrame with ``'source'`` column already set to ``"train"``.
-    df_test : pd.DataFrame
-        Test DataFrame with ``'source'`` column already set to ``"test"``.
-    sample_rows : int
-        Target number of rows in the returned sample (e.g. 200_000).
-    random_state : int
-        Seed for the random sampler — ensures reproducibility.
-
-    Returns
-    -------
-    pd.DataFrame
-        Combined and sampled DataFrame with ``sample_rows`` rows (or fewer if
-        the combined dataset is smaller than requested) and a ``'source'``
-        column identifying each row's origin.
-
-    Raises
-    ------
-    ValueError
-        If ``'source'`` column is missing from either input DataFrame,
-        indicating ``_add_source_column()`` was not called beforehand.
-    """
-    # Step 1: Validate that both DataFrames have the 'source' column.
-    for name, df in [("df_train", df_train), ("df_test", df_test)]:
-        if "source" not in df.columns:
-            log.error(
-                "[_sample_combined] '%s' is missing 'source' column — "
-                "call _add_source_column() before _sample_combined().",
-                name,
-            )
-            raise ValueError(
-                f"'{name}' is missing the 'source' column. "
-                f"Call _add_source_column() on both DataFrames first."
-            )
-
-    # Step 2: Log input sizes for memory and proportion awareness.
-    log.info(
-        "[_sample_combined] combining train rows=%d and test rows=%d "
-        "(combined=%d) → target sample=%d random_state=%d",
-        len(df_train),
-        len(df_test),
-        len(df_train) + len(df_test),
-        sample_rows,
-        random_state,
-        )
-
-    # Step 3: Concatenate train and test into one combined DataFrame.
-    # ignore_index=True resets the integer index after concat.
-    df_combined: pd.DataFrame = pd.concat(
-        [df_train, df_test],
-        ignore_index=True,
-    )
-    log.debug(
-        "[_sample_combined] concat complete combined rows=%d cols=%d",
-        len(df_combined),
-        df_combined.shape[1],
-    )
-
-    # Step 4: Draw random sample from the combined DataFrame.
-    # If the combined size is smaller than sample_rows, return all rows.
-    if len(df_combined) <= sample_rows:
-        log.warning(
-            "[_sample_combined] combined rows=%d <= sample_rows=%d — "
-            "returning all rows without sampling.",
-            len(df_combined),
-            sample_rows,
-        )
-        return df_combined.reset_index(drop=True)
-
-    df_sample: pd.DataFrame = df_combined.sample(
-        n=sample_rows, random_state=random_state
-    ).reset_index(drop=True)
-
-    # Step 5: Log resulting source distribution for drift-detection audit trail.
-    source_counts = df_sample["source"].value_counts().to_dict()
-    log.info(
-        "[_sample_combined] sample complete rows=%d source_distribution=%s",
-        len(df_sample),
-        source_counts,
-    )
-
-    return df_sample
-
-
-# =============================================================================
-# SECTION 4 - PUBLIC PARQUET READING (I)
-# Only reading lives here. Writing and pickle operations are in
-# persist_utils_data.py (Single Responsibility Principle).
-#
-# Imported at the top of this module and re-exported via noqa:F401
-# so existing callers can still do:
-#   from crispdm.data.load_utils_data import save_parquet   # still works
-#   from crispdm.data.persist_utils_data import save_parquet # preferred
-#
-# Persistence functions available via import above:
-#   save_parquet(df, path, compression)  → Stages 2-3 intermediate parquets
-#   save_pickle(obj, path)               → Stages 3-4 transformers + models
-#   load_pickle(path)                    → Stage 5 load transformers + models
-# =============================================================================
-
-
-def load_parquet(
-        path: str | Path,
-        *,
-        columns: Optional[list[str]] = None,
-) -> pd.DataFrame:
-    """
-    Load a Parquet file produced by a previous pipeline stage.
-
-    Used in Stages 3, 4, and 5 (Option A) to read intermediate Parquet files.
-    The input_source, input_source_sample, and input_source_full fields of
-    ReadStrategyContract provide the path values callers pass here.
-
-    Covers:
-      Option A Stage 3: reads sample_200k_with_source.parquet
-      Option B Stage 3: reads train_sample_200k.parquet
-      Option A Stage 4: reads train_prepared_150k.parquet
-      Option B Stage 4: reads train_prepared_200k.parquet
-      Option A Stage 5: reads test_prepared_50k.parquet (quick eval)
-
-    Parameters
-    ----------
-    path : str | Path
-        Relative or absolute path to the .parquet file.
-    columns : Optional[list[str]]
-        Subset of columns to load. None loads all columns.
-
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame with all rows and the requested columns.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the resolved path does not exist.
-    """
-    # Step 1: Resolve path to absolute location.
-    resolved = resolve_path(path)
-    log.debug("[load_parquet] path=%s columns=%s", resolved, columns)
-
-    # Step 2: Validate file existence before attempting to read.
-    if not resolved.exists():
-        log.error("[load_parquet] parquet file not found path=%s", resolved)
-        raise FileNotFoundError(f"Parquet file not found: {resolved}")
-
-    # Step 3: Load parquet — columns=None reads all columns.
-    try:
-        log.info("[load_parquet] loading path=%s columns=%s", resolved, columns)
-        df: pd.DataFrame = pd.read_parquet(resolved, columns=columns)
-
-    except Exception:
-        log.exception("[load_parquet] read_parquet failed path=%s", resolved)
-        raise
-
-    # Step 4: Log result dimensions for audit trail.
-    log.info(
-        "[load_parquet] loaded rows=%d cols=%d path=%s", len(df), df.shape[1], resolved
-    )
-    return df
-
-
-# =============================================================================
-# SECTION 5 - PUBLIC DISPATCHER
-# =============================================================================
 
 
 def load_by_strategy(
@@ -1521,11 +837,6 @@ def load_with_origin(
         resolved,
     )
     return df, resolved
-
-
-# =============================================================================
-# SECTION 6 - PUBLIC LOADERS (stage and option specific)
-# =============================================================================
 
 
 def load_train_only(
@@ -1894,61 +1205,203 @@ def filter_by_source(
     )
     return df_filtered
 
-
-# =============================================================================
-# SECTION 4.1 - PUBLIC PICKLE READING (re-exported for backward compatibility)
-# =============================================================================
-
-
-def load_pickle(
-        path: str | Path,
-) -> Any:
+def _add_source_column(
+        df: pd.DataFrame,
+        source_value: str,
+) -> pd.DataFrame:
     """
-    Load a pickled Python object from disk.
+    Add a ``'source'`` column to a DataFrame to mark its dataset origin.
 
-    Re-exported from :mod:`crispdm.data.persist_utils_data` for backward
-    compatibility. Callers are encouraged to import from ``persist_utils_data``
-    directly in new code.
+    **Option A — Stage 2 only.**
+    Called once for the train DataFrame (``source_value="train"``) and once
+    for the test DataFrame (``source_value="test"``) before concatenation.
+    The resulting ``'source'`` column enables:
 
-    Used in Stage 5 to deserialise the fitted transformers pipeline written
-    by Stage 3 (``transformers_pipeline.pkl``) for on-the-fly application to
-    each 100k-row test chunk during full evaluation.
+    - Drift detection in Stage 2 (compare distributions by source).
+    - Row filtering in Stage 3 (separate df_train ≈ 150k and df_test ≈ 50k).
 
-    Also used in Stage 5 to load trained models written by Stage 4
-    (``kmeans_best.pkl``, ``dbscan_best.pkl``) for cluster assignment.
-
-    Security note: only load pickle files from trusted pipeline artifact
-    directories. Never load pickles from external or user-supplied sources.
-
-    Covers: Option A and Option B -- both use ``transformers_pipeline.pkl``
-    in Stage 5, though the transformers were fitted on different data:
-      Option A: fitted on train_rows (~150k) from the combined sample.
-      Option B: fitted on train_rows (200k) from the train-only sample.
+    Not called in Option B (no source tracking needed).
 
     Parameters
     ----------
-    path : str | Path
-        Relative or absolute path to the ``.pkl`` file.
-        Resolved against the project root via :func:`resolve_path`.
+    df : pd.DataFrame
+        Input DataFrame to annotate. Modified in place is avoided —
+        a copy is returned to keep the function side-effect-free.
+    source_value : str
+        Label to assign to every row: ``"train"`` or ``"test"``.
 
     Returns
     -------
-    Any
-        Deserialised Python object.
+    pd.DataFrame
+        New DataFrame identical to *df* with an additional ``'source'``
+        column containing ``source_value`` for every row.
 
     Raises
     ------
-    FileNotFoundError
-        If the resolved path does not exist.
-    Exception
-        Any ``pickle.load()`` exception is logged then re-raised.
-
-    Examples
-    --------
-    >>> transformers = load_pickle("out/runs/.../transformers_pipeline.pkl")
-    >>> kmeans = load_pickle("out/runs/.../models/kmeans_best.pkl")
+    ValueError
+        If ``source_value`` is not ``"train"`` or ``"test"``.
     """
-    # Delegate to the canonical implementation in persist_utils_data.
-    from crispdm.data.persist_utils_data import load_pickle as _load_pickle
+    # Step 1: Validate source_value — only 'train' and 'test' are allowed.
+    _valid_sources = {"train", "test"}
+    if source_value not in _valid_sources:
+        log.error(
+            "[_add_source_column] invalid source_value='%s' — expected %s",
+            source_value,
+            _valid_sources,
+        )
+        raise ValueError(
+            f"source_value='{source_value}' is not valid. "
+            f"Expected one of {_valid_sources}."
+        )
 
-    return _load_pickle(path)
+    # Step 2: Warn if 'source' column already exists — prevents silent overwrite.
+    if "source" in df.columns:
+        log.warning(
+            "[_add_source_column] 'source' column already exists — "
+            "overwriting with source_value='%s' rows=%d",
+            source_value,
+            len(df),
+        )
+
+    # Step 3: Assign the source column and return a new DataFrame.
+    log.debug(
+        "[_add_source_column] adding source='%s' to rows=%d",
+        source_value,
+        len(df),
+    )
+    result: pd.DataFrame = df.assign(source=source_value)
+
+    log.info(
+        "[_add_source_column] done source='%s' rows=%d cols=%d",
+        source_value,
+        len(result),
+        result.shape[1],
+    )
+    return result
+
+
+def _sample_combined(
+        df_train: pd.DataFrame,
+        df_test: pd.DataFrame,
+        *,
+        sample_rows: int,
+        random_state: int,
+) -> pd.DataFrame:
+    """
+    Combine train and test DataFrames and draw a stratified random sample.
+
+    **Option A — Stage 2 only.**
+    Implements the common of the Option A data strategy:
+
+    1. Both DataFrames must already have a ``'source'`` column
+       (added by ``_add_source_column()`` before this call).
+    2. Concatenates train + test into one combined DataFrame (≈ 19M rows
+       for GUIDE: 13M train + 6M test).
+    3. Draws ``sample_rows`` random rows from the combined DataFrame so that
+       both datasets are proportionally represented (≈ 150k train, ≈ 50k test
+       for a 200k sample from a 13M/6M split).
+
+    The proportional representation is a natural consequence of random sampling
+    from the combined DataFrame — no explicit stratification is applied.
+
+    Not called in Option B (train is sampled independently).
+
+    Parameters
+    ----------
+    df_train : pd.DataFrame
+        Train DataFrame with ``'source'`` column already set to ``"train"``.
+    df_test : pd.DataFrame
+        Test DataFrame with ``'source'`` column already set to ``"test"``.
+    sample_rows : int
+        Target number of rows in the returned sample (e.g. 200_000).
+    random_state : int
+        Seed for the random sampler — ensures reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        Combined and sampled DataFrame with ``sample_rows`` rows (or fewer if
+        the combined dataset is smaller than requested) and a ``'source'``
+        column identifying each row's origin.
+
+    Raises
+    ------
+    ValueError
+        If ``'source'`` column is missing from either input DataFrame,
+        indicating ``_add_source_column()`` was not called beforehand.
+    """
+    # Step 1: Validate that both DataFrames have the 'source' column.
+    for name, df in [("df_train", df_train), ("df_test", df_test)]:
+        if "source" not in df.columns:
+            log.error(
+                "[_sample_combined] '%s' is missing 'source' column — "
+                "call _add_source_column() before _sample_combined().",
+                name,
+            )
+            raise ValueError(
+                f"'{name}' is missing the 'source' column. "
+                f"Call _add_source_column() on both DataFrames first."
+            )
+
+    # Step 2: Log input sizes for memory and proportion awareness.
+    log.info(
+        "[_sample_combined] combining train rows=%d and test rows=%d "
+        "(combined=%d) → target sample=%d random_state=%d",
+        len(df_train),
+        len(df_test),
+        len(df_train) + len(df_test),
+        sample_rows,
+        random_state,
+        )
+
+    # Step 3: Concatenate train and test into one combined DataFrame.
+    # ignore_index=True resets the integer index after concat.
+    df_combined: pd.DataFrame = pd.concat(
+        [df_train, df_test],
+        ignore_index=True,
+    )
+    log.debug(
+        "[_sample_combined] concat complete combined rows=%d cols=%d",
+        len(df_combined),
+        df_combined.shape[1],
+    )
+
+    # Step 4: Draw random sample from the combined DataFrame.
+    # If the combined size is smaller than sample_rows, return all rows.
+    if len(df_combined) <= sample_rows:
+        log.warning(
+            "[_sample_combined] combined rows=%d <= sample_rows=%d — "
+            "returning all rows without sampling.",
+            len(df_combined),
+            sample_rows,
+        )
+        return df_combined.reset_index(drop=True)
+
+    df_sample: pd.DataFrame = df_combined.sample(
+        n=sample_rows, random_state=random_state
+    ).reset_index(drop=True)
+
+    # Step 5: Log resulting source distribution for drift-detection audit trail.
+    source_counts = df_sample["source"].value_counts().to_dict()
+    log.info(
+        "[_sample_combined] sample complete rows=%d source_distribution=%s",
+        len(df_sample),
+        source_counts,
+    )
+
+    return df_sample
+
+
+
+def _filter_read_csv_kwargs(params: dict[str, Any]) -> dict[str, Any]:
+    """Keep only parameters that pd.read_csv() accepts.
+
+    Uses inspect.signature to dynamically build the whitelist,
+    so it never goes out of sync with pandas API.
+    """
+    valid_params = set(inspect.signature(pd.read_csv).parameters.keys())
+    filtered = {k: v for k, v in params.items() if k in valid_params}
+    skipped = set(params.keys()) - set(filtered.keys())
+    if skipped:
+        log.debug("[_filter_read_csv_kwargs] skipping non-pandas keys: %s", skipped)
+    return filtered

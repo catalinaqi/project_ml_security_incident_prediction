@@ -15,7 +15,7 @@
         "random_seed": 7,
         "output_root": "outputs",
         "overwrite_artifacts": true,
-        "log_level": "INFO"
+        "log_level": "DEGUB"
       },
       "output_policy": {
         "save_all_as_png": true,
@@ -30,7 +30,7 @@
         "enabled": true,
         "description": "Fast iteration mode with smaller samples for development",
         "mode": "sample",
-        "sample_rows": 50000,
+        "sample_rows": 7000,
         "stratify_column": "IncidentGrade"
       },
       "prod": {
@@ -93,6 +93,7 @@
                     },
                     "hierarchy_profiling": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Analyze Evidence→Alert→Incident hierarchy and ratios",
                       "params": {
                         "hierarchy_levels": [
@@ -106,7 +107,7 @@
                           "alerts_per_incident": 2.7
                         }
                       },
-                      "output": "2.1.data_acquisition.hierarchy_profiling.json"
+                      "output": "2.1.data_acquisition.hierarchy_report.json"
                     }
                   }
                 }
@@ -114,8 +115,7 @@
               "output_artifacts": {
                 "sample_train_parquet": "2.1.data_acquisition.sample_train.parquet",
                 "sample_test_parquet": "2.1.data_acquisition.sample_test.parquet",
-                "sample_stats": "2.1.data_acquisition.stats_comparison.json",
-                "hierarchy_report": "2.1.data_acquisition.hierarchy_report.json"
+                "sample_stats": "2.1.data_acquisition.stats_comparison.json"
               }
             },
             "step_2_2_data_description": {
@@ -127,6 +127,7 @@
                   "techniques": {
                     "column_metadata": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "include_cardinality": true,
                         "include_dtypes": true,
@@ -137,6 +138,7 @@
                     },
                     "schema_comparison": {
                       "enabled": true,
+                      "split": "compare",
                       "params": {
                         "check_column_names": true,
                         "check_dtypes": true,
@@ -155,6 +157,7 @@
                   "techniques": {
                     "basic_stats": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "numeric_only": true,
                         "exclude_bigint_hashed": true,
@@ -175,6 +178,7 @@
                   "techniques": {
                     "multi_value_parsing": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Parse comma-separated values in MitreTechniques and Roles",
                       "params": {
                         "columns": [
@@ -190,6 +194,7 @@
                     },
                     "cardinality_profiling": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Classify columns by cardinality and identify BIGINT pseudo-categoricals",
                       "params": {
                         "target_columns": {
@@ -231,6 +236,7 @@
                     },
                     "target_distribution": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Analyze IncidentGrade distribution and detect 'None' values",
                       "params": {
                         "target_column": "IncidentGrade",
@@ -247,6 +253,7 @@
                   "techniques": {
                     "id_column_detection": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Detect identifier columns (uniqueness >95%)",
                       "params": {
                         "id_patterns": [
@@ -261,6 +268,7 @@
                     },
                     "entity_conditional_sparsity": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Detect EntityType-dependent NULL patterns (Device*, Account*, etc.)",
                       "params": {
                         "entity_column": "EntityType",
@@ -325,7 +333,7 @@
                 "statistics_summary": "2.2.statistics_summary.json"
               }
             },
-            "step_2_3_data_quality_verification": {
+            "step_2_3_data_quality_assessment": {
               "enabled": true,
               "description": "Quality checks with leakage detection - no expensive computations",
               "methods": {
@@ -334,6 +342,7 @@
                   "techniques": {
                     "completeness_report": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "include_patterns": true,
                         "show_top_columns": 50,
@@ -348,6 +357,7 @@
                   "techniques": {
                     "duplicate_detection": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Detect duplicates at Evidence level (Id column)",
                       "params": {
                         "subset": [
@@ -359,6 +369,7 @@
                     },
                     "sentinel_detection": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "sentinel_values": [
                           -1,
@@ -381,6 +392,7 @@
                   "techniques": {
                     "crosstab_analysis": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "target_column": "IncidentGrade",
                         "suspect_columns": [
@@ -396,6 +408,7 @@
                     },
                     "post_triage_detection": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Detect features likely generated after incident triage",
                       "params": {
                         "high_missingness_threshold": 0.9,
@@ -413,10 +426,11 @@
                   "techniques": {
                     "timestamp_range": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Verify observation window is 14 days",
                       "params": {
                         "timestamp_column": "Timestamp",
-                        "expected_min_days": 14,
+                        "expected_min_days": 14
                         "detect_timezone_issues": true
                       },
                       "output": "2.3.temporal_integrity.timestamp_range.json"
@@ -428,6 +442,7 @@
                   "techniques": {
                     "data_drift": {
                       "enabled": true,
+                      "split": "compare",
                       "params": {
                         "compare_datasets": true,
                         "columns": [
@@ -455,6 +470,7 @@
                   "techniques": {
                     "column_catalog": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "include_created_in_phase_2": false,
                         "categorize_by_role": true,
@@ -501,6 +517,7 @@
                   "techniques": {
                     "categorical_distributions": {
                       "enabled": true,
+                      "split": "both",
                       "params": {
                         "columns": [
                           "IncidentGrade",
@@ -516,6 +533,7 @@
                     },
                     "temporal_overview": {
                       "enabled": true,
+                      "split": "both",
                       "description": "Daily incident counts - lightweight visualization",
                       "params": {
                         "time_column": "Timestamp",
@@ -527,6 +545,7 @@
                     },
                     "target_by_category": {
                       "enabled": true,
+                      "split": "both",
                       "description": "IncidentGrade distribution by Category (stacked bar)",
                       "params": {
                         "target_column": "IncidentGrade",

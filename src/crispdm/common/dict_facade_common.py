@@ -1,4 +1,4 @@
-# src/crispdm/common/helpers_adapter_core.py
+# src/crispdm/common/dict_facade_common.py
 """
 =============================================================================
 ADD TO:
