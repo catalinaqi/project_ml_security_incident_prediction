@@ -33,6 +33,7 @@ notebooks/.ipynb_checkpoints/
 #reports/
 out
 #src/crispml/*.out
+outputs/
 
 # ============================================
 #  POETRY
@@ -57,4 +58,9 @@ out
 data/raw/*.csv
 *.csv
 
-
+# ============================================
+#  ....
+# ============================================
+.continue/
+.continuerc.yml
+docs/

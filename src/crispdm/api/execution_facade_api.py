@@ -8,16 +8,15 @@ from crispdm.configuration.yml_repository_config import YmlRepository
 from crispdm.common.context_facade_common import RunContext, create_run_context
 from crispdm.common.logging_adapter_common import config_run_logging, get_logger
 from crispdm.data.download_extractor_data import download_microsoft_dataset
+
 from crispdm.pipeline.clustering_runner_pipeline import (
     ClusteringRunContext,
     create_clustering_context,
     run_clustering_pipeline_phase2_1,
-    run_clustering_pipeline_phase3_1,   # <--- NEW
-)
-from crispdm.pipeline.clustering_runner_pipeline import (
-    ClusteringRunContext,
-    create_clustering_context,
-    run_clustering_pipeline_phase2_1,
+    run_clustering_pipeline_phase3_1,
+    run_clustering_pipeline_phase3_2,
+    run_clustering_pipeline_phase3_3,
+    run_clustering_pipeline_phase3_5,
 )
 from crispdm.phase.phase2_understanding_runner_phase import (
     run_data_description,
@@ -390,5 +389,179 @@ def _dispatch_pipeline_phase3_1(ctx: RunContext) -> RunContext:
 
     raise NotImplementedError(
         f"[_dispatch_pipeline_phase3_1] task={ctx.task!r} pipeline not yet implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+def run_phase3_2(ctx: RunContext) -> RunContext:
+    """Run Phase 3.2 - Data Cleaning.
+
+    Applies missing data imputation, categorical noise cleanup,
+    and duplicate removal.  Dispatches to the pipeline-specific runner.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata. Must have
+        ``df_train`` populated by Phase 3.1.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 3.2.
+
+    Raises
+    ------
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    log.info("[run_phase3_2] start task=%s run_id=%s", ctx.task, ctx.run_id)
+    ctx = _dispatch_pipeline_phase3_2(ctx)
+    log.info("[run_phase3_2] done df_train_shape=%s",
+             ctx.df_train.shape if ctx.df_train is not None else None)
+    return ctx
+
+
+def _dispatch_pipeline_phase3_2(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 3.2 to the correct pipeline runner by ``ctx.task``."""
+    if ctx.task == ProblemType.CLUSTERING.value:
+        clustering_ctx = ClusteringRunContext(
+            config=ctx.config,
+            run_dir=ctx.run_dir,
+            run_id=ctx.run_id,
+            dataset_key=ctx.dataset_key,
+            df_train=ctx.df_train,
+            df_test=ctx.df_test,
+            artifacts=ctx.artifacts,
+            phase_results=ctx.phase_results,
+            errors=ctx.errors,
+        )
+        return run_clustering_pipeline_phase3_2(clustering_ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase3_2] task={ctx.task!r} pipeline not yet implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+# =============================================================================
+# (after _dispatch_pipeline_phase3_2)
+# =============================================================================
+
+def run_phase3_3(ctx: RunContext) -> RunContext:
+    """Run Phase 3.3 - Data Transformation.
+
+    Applies feature engineering, temporal extraction, scaling, encoding,
+    column dropping, and missing‑flag preservation.  Dispatches to the
+    pipeline‑specific runner.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata. Must have
+        ``df_train`` populated by Phase 3.2.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 3.3.
+
+    Raises
+    ------
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    log.info("[run_phase3_3] start task=%s run_id=%s", ctx.task, ctx.run_id)
+    ctx = _dispatch_pipeline_phase3_3(ctx)
+    log.info("[run_phase3_3] done df_train_shape=%s",
+             ctx.df_train.shape if ctx.df_train is not None else None)
+    return ctx
+
+
+def _dispatch_pipeline_phase3_3(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 3.3 to the correct pipeline runner by ``ctx.task``.
+
+    For clustering, wraps the generic ``RunContext`` into a
+    ``ClusteringRunContext`` and calls ``run_clustering_pipeline_phase3_3``.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 3.3.
+
+    Raises
+    ------
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    if ctx.task == ProblemType.CLUSTERING.value:
+        clustering_ctx = ClusteringRunContext(
+            config=ctx.config,
+            run_dir=ctx.run_dir,
+            run_id=ctx.run_id,
+            dataset_key=ctx.dataset_key,
+            df_train=ctx.df_train,
+            df_test=ctx.df_test,
+            artifacts=ctx.artifacts,
+            phase_results=ctx.phase_results,
+            errors=ctx.errors,
+        )
+        return run_clustering_pipeline_phase3_3(clustering_ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase3_3] task={ctx.task!r} pipeline not yet implemented. "
+        f"Valid tasks: {[m.value for m in ProblemType]}"
+    )
+
+def run_phase3_5(ctx: RunContext) -> RunContext:
+    """Run Phase 3.5 - Data Formatting.
+
+    Applies shuffle, type casting, and numpy conversion.
+    Dispatches to the pipeline-specific runner.
+
+    Parameters
+    ----------
+    ctx : RunContext
+        Run context with task set in config metadata. Must have
+        ``df_train`` populated by Phase 3.3.
+
+    Returns
+    -------
+    RunContext
+        Same ``ctx`` enriched by Phase 3.5.
+
+    Raises
+    ------
+    NotImplementedError
+        If a runner does not exist yet for the detected task.
+    """
+    log.info("[run_phase3_5] start task=%s run_id=%s", ctx.task, ctx.run_id)
+    ctx = _dispatch_pipeline_phase3_5(ctx)
+    log.info("[run_phase3_5] done df_train_shape=%s",
+             ctx.df_train.shape if ctx.df_train is not None else None)
+    return ctx
+
+
+def _dispatch_pipeline_phase3_5(ctx: RunContext) -> RunContext:
+    """Dispatch Phase 3.5 to the correct pipeline runner by ``ctx.task``."""
+    if ctx.task == ProblemType.CLUSTERING.value:
+        clustering_ctx = ClusteringRunContext(
+            config=ctx.config,
+            run_dir=ctx.run_dir,
+            run_id=ctx.run_id,
+            dataset_key=ctx.dataset_key,
+            df_train=ctx.df_train,
+            df_test=ctx.df_test,
+            artifacts=ctx.artifacts,
+            phase_results=ctx.phase_results,
+            errors=ctx.errors,
+        )
+        return run_clustering_pipeline_phase3_5(clustering_ctx)
+
+    raise NotImplementedError(
+        f"[_dispatch_pipeline_phase3_5] task={ctx.task!r} pipeline not yet implemented. "
         f"Valid tasks: {[m.value for m in ProblemType]}"
     )

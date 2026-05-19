@@ -84,14 +84,9 @@ clustering_pipeline_config:
         # STEP 3.1: DATA SELECTION
         # ──────────────────────────────────────────────────────────────────────
         step_3_1_data_selection:
-          # 3.1 Data selection
-          # Read sample from Stage 2. Filter by 'source' column.
-          # Drop ID columns and constant features. Keep useful features for clustering.
           enabled: true
           methods:
-            # ========================================
-            # METHOD 1: Sentinel Removal
-            # ========================================
+
             sentinel_removal:
               enabled: true
               techniques:
@@ -108,42 +103,47 @@ clustering_pipeline_config:
                       NetworkMessageId: 530000
                       FileName: 290000
                       Sha256: 139000
+                      AlertTitle: 10000      # ← NUEVO: confirmado bigint_hashed en fase 2
                     actions:
                       create_binary_flags: true
                       nullify_above_threshold: true
                       keep_real_values: true
+                      include_real_in_output: true   # ← NUEVO: garantiza que _real llegue a final_features
                   output: "3.1.sentinel_removal.bigint_cleanup.json"
-            # ========================
-            # METHOD 2: DATASET DEFINITION
-            # ========================
+
             dataset_definition:
               enabled: true
               techniques:
                 manual_include_exclude:
                   enabled: true
                   params:
-                    include: [ ]                    # Sin inclusiones forzadas
+                    include: [ ]
                     exclude:
-                      - "ThreatFamily"              # 99% missing + leakage perfecto (Phase 2)
+                      - "ThreatFamily"
                   output: "3.1.dataset_definition.manual_include_exclude.json"
+
                 drop_technical_columns:
                   enabled: true
                   params:
-                    patterns: [ ]                   # Sin patrones genéricos
                     manual_exclude:
                       - "Id"
-                      - "IncidentId"
-                      - "AlertId"
-                      - "IncidentGrade"             # Target (no usar en clustering)
-                      - "ActionGrouped"             # Post-triage (missing >99%)
-                      - "ActionGranular"            # Post-triage (missing >99%)
-                      - "EmailClusterId"            # 98.96% missing (completeness report)
-                      - "MitreTechniques"           # Multi-value, 57% missing
-                      - "ThreatFamily"              # NUEVO: 99.19% missing + leakage 1.0
+                      - "IncidentGrade"          # target — no entra en clustering
+                      - "ActionGrouped"          # post-triage, >99% missing
+                      - "ActionGranular"         # post-triage, >99% missing
+                      - "EmailClusterId"         # 98.96% missing
+                      - "MitreTechniques"        # multi-value, 57% missing, sin explotar
+                      - "ThreatFamily"           # leakage confirmado fase 2
+                      - "Usage"                  # add because find F2
+                    keep_for_aggregation: # ← NUEVO: protegidos hasta post-aggregation en 3.3
+                      - "IncidentId"             # clave groupby en 3.3
+                      - "AlertId"                # para n_alerts_per_incident en 3.3
+                      - "EntityType"             # para n_unique_entity_types en 3.3
+                      - "IncidentGrade" # retenida para stratified shuffle en 3.5, dropeada ANTES de array_conversion
+                    leakage_risk_flag: # ← NUEVO: confirmado suspect_leakage en fase 2
+                      - "SuspicionLevel"
+                      - "LastVerdict"
                   output: "3.1.dataset_definition.drop_technical_columns.json"
-            # ========================
-            # METHOD 3: FEATURE SELECTION
-            # ========================
+
             feature_selection:
               enabled: true
               techniques:
@@ -151,199 +151,130 @@ clustering_pipeline_config:
                   enabled: true
                   params: { threshold_unique: 1 }
                   output: "3.1.feature_selection.remove_constant_features.json"
-                  notes: "Phase 2: No columns have n_unique=1. Keep for safety."
                 remove_duplicate_features:
                   enabled: true
                   params: { strategy: "exact" }
                   output: "3.1.feature_selection.remove_duplicate_features.json"
-                  notes: "Phase 2: No exact duplicate columns. Keep for safety."
-          # ========================
-          # OUTPUTS FINAL STEP 3.1
-          # ========================
+
           output_artifacts:
-            final_features: "3.1.data_selection.final_features.json"       # Lista final después de TODOS los filtros
-            overview_plot: "3.1.data_selection.overview.png"               # Sankey/waterfall de reducción de features
+            final_features: "3.1.data_selection.final_features.json"
+            overview_plot: "3.1.data_selection.overview.png"
         # ──────────────────────────────────────────────────────────────────────
         # STEP 3.2: DATA CLEANING
         # ──────────────────────────────────────────────────────────────────────
         step_3_2_data_cleaning:
-          # Fit imputation and outlier handling ONLY on train rows.
-          # Apply same transformers to both train and test for consistency.
           enabled: true
           methods:
-            # ========================
-            # METHOD 1: MISSING DATA
-            # ========================
+
             missing_data_handling:
               enabled: true
               selection_policy:
-                numeric_imputer: "median_imputation"     # Para BIGINT reales nullificadas
-                categorical_imputer: "mode_imputation"   # Para SuspicionLevel, LastVerdict y demás object
+                numeric_imputer: "median_imputation"
+                categorical_imputer: "mode_imputation"
               techniques:
                 median_imputation:
                   enabled: true
-                  params: { numeric_only: true }
+                  params:
+                    numeric_only: true
+                    exclude_columns:          # ← NUEVO: excluir BIGINTs explícitamente
+                      - "AccountUpn"          # BIGINT — sin valores reales separados
+                      - "IpAddress"           # BIGINT
+                      - "DeviceId"            # BIGINT
+                      - "AccountSid"          # BIGINT
+                      - "AccountObjectId"     # BIGINT
+                      - "NetworkMessageId"    # BIGINT
+                      - "FileName"            # BIGINT
+                      - "Sha256"              # BIGINT
+                      - "Url"                 # BIGINT nullificado en 3.1 — no imputar
+                      - "AlertTitle"          # BIGINT nullificado en 3.1 — no imputar
+                      - "DetectorId"          # BIGINT
+                      - "OrgId"               # BIGINT/pseudo-categórico
+                      - "ApplicationId"       # pseudo-categórico
+                      - "OAuthApplicationId"  # pseudo-categórico
                   output: "3.2.missing_data_handling.median_imputation.values.json"
                   notes: >
-                    Imputa AccountUpn_real, IpAddress_real, AccountSid_real, etc.
-                    (sentinel-nullificadas en step 3.1). Mediana estimada de los valores reales.
+                    Con 3.1 corregido, no existen columnas _real separadas.
+                    BIGINTs originales excluidos explícitamente — imputar un ID
+                    con mediana no tiene sentido semántico. Si no quedan columnas
+                    numéricas continuas con missing, este paso no imputa nada
+                    y lo registra en el output.
+
                 mode_imputation:
                   enabled: true
                   params: { for_categoricals: true }
+                  columns: ["LastVerdict"]
+                  add_missing_flags:
+                    - "LastVerdict_is_missing"
+                    - "SuspicionLevel_is_missing"
                   output: "3.2.missing_data_handling.mode_imputation.values.json"
                   notes: >
-                    Imputa SuspicionLevel (84.88% missing → modo "Suspicious"),
-                    LastVerdict (76.5% → modo "Suspicious").
-                    Columnas >95% missing (ResourceType, AntispamDirection, Roles) ya excluidas en step 3.1.
-            # ========================
-            # METHOD 2: OUTLIERS
-            # ========================
+                    SuspicionLevel: 84.88% missing, solo 2 valores → no imputar,
+                    crear flag. LastVerdict: imputar con moda (Suspicious) + flag.
+
             outlier_handling:
-              enabled: true
-              techniques:
-                winsorization:
-                  enabled: false
-                  params: { limits: [ 0.01, 0.01 ] }
-                iqr_clipping:
-                  enabled: true
-                  params:
-                    k: 1.5
-                    exclude_columns:
-                      # BIGINT pseudo-categóricas (originales + flags de missing)
-                      - "DetectorId"
-                      - "AlertTitle"
-                      - "OrgId"
-                      - "IpAddress"
-                      - "Sha256"
-                      - "FileName"
-                      - "AccountUpn"
-                      - "AccountSid"
-                      - "AccountObjectId"
-                      - "DeviceId"
-                      - "NetworkMessageId"
-                      - "Url"
-                      - "AccountName"
-                      - "DeviceName"
-                      - "FolderPath"
-                      - "City"
-                      - "AccountUpn_is_missing"
-                      - "IpAddress_is_missing"
-                      - "DeviceId_is_missing"
-                      - "AccountSid_is_missing"
-                      - "AccountObjectId_is_missing"
-                      - "NetworkMessageId_is_missing"
-                      - "FileName_is_missing"
-                      - "Sha256_is_missing"
-                      # Columnas de código (no continuas)
-                      - "RegistryKey"
-                      - "RegistryValueName"
-                      - "RegistryValueData"
-                      - "ApplicationId"
-                      - "ApplicationName"
-                      - "OAuthApplicationId"
-                      - "ResourceIdName"
-                      - "OSFamily"
-                      - "OSVersion"
-                      - "CountryCode"
-                      - "State"
-                      # Columnas ordinales (se codifican en 3.3)
-                      - "SuspicionLevel"
-                      - "LastVerdict"
-                      # Columnas object (no numéricas)
-                      - "Category"
-                      - "EntityType"
-                      - "EvidenceRole"
-                      - "ResourceType"
-                      - "AntispamDirection"
-                      - "Roles"
-                      # Timestamp (datetime)
-                      - "Timestamp"
-                  output: "3.2.outlier_handling.iqr_clipping.impact.png"
-                  notes: >
-                    Excluidas ~40 columnas: BIGINT pseudo-categóricas y sus flags,
-                    columnas con sentinel 0 (CountryCode, OSVersion), códigos (Registry*, Application*),
-                    ordinales (SuspicionLevel, LastVerdict), y no numéricas.
-                    Solo columnas verdaderamente continuas (hour, n_evidences*, etc.)
-                    serán evaluadas para clipping.
-                zscore_filtering:
-                  enabled: false
-                  params: { threshold: 3.0 }
-            # ========================
-            # METHOD 3: TRANSFORMATIONS
-            # ========================
+              enabled: false
+              notes: >
+                Sin columnas continuas reales en este step. IQR clipping
+                se aplica en 3.3 post-feature engineering sobre
+                n_evidences_per_incident, n_alerts_per_incident,
+                n_unique_entity_types y Timestamp_hour.
+
             robust_transformations:
               enabled: false
-              techniques:
-                log_transform:
-                  enabled: false
-                  params:
-                    shift_if_needed: true
-                    columns: [ "DetectorId", "AlertTitle", "OrgId" ]
-                    output: "3.2.robust_transformations.log_transform.distributions.png"
-                  notes: >
-                    Disabled: DetectorId, AlertTitle, OrgId are pseudo-categorical IDs,
-                    not continuous. Log transform would be meaningless. Apply log to
-                    count features (n_evidences*, etc.) in step 3.3 if needed.
-                box_cox:
-                  enabled: false
-                  params: { }
-                  notes: "Disabled: no continuous positive variables at this stage."
-                yeo_johnson:
-                  enabled: false
-                  params: { }
-                  notes: "Disabled: no continuous variables requiring Yeo-Johnson."
-            # ========================
-            # METHOD 4: CATEGORICAL NOISE
-            # ========================
+              notes: >
+                Sin variables continuas que requieran transformación en este step.
+
             categorical_noise:
               enabled: true
               techniques:
                 fix_typos:
-                  enabled: false                        # ← CAMBIO: deshabilitado
-                  params: { lowercase: true, regex_cleanup: true }
-                  notes: >
-                    Disabled: object columns (Category, EntityType, etc.) are clean
-                    from Phase 2. Lowercasing could cause drift with test data.
+                  enabled: false
                 text_normalization:
-                  enabled: false                        # ← CAMBIO: deshabilitado
-                  params: { remove_accents: true }
+                  enabled: false
+                sentinel_cleanup:
+                  enabled: true
+                  params:
+                    columns:
+                      OSFamily:
+                        sentinel_value: 0
+                        replace_with: null
+                  output: "3.2.categorical_noise.sentinel_cleanup.json"
                   notes: >
-                    Disabled: no accented characters found in Phase 2.
+                    OSFamily==0 (~3,826 filas) es sentinel. Se nullifica
+                    antes de rare_grouping.
                 rare_grouping:
                   enabled: true
                   params:
-                    min_freq: 0.001                      # Se mantiene (0.1% para 200k filas)
-                    exclude_columns: [ ]
-                  output: "3.2.categorical_noise.rare_grouping.map.json"
+                    min_freq: 0.001
+                    unseen_category: "OTHER"
+                    exclude_columns:          # ← NUEVO: excluir BIGINTs nullificados
+                      - "Url"                 # nullificado en 3.1, no es categórico string
+                      - "AlertTitle"          # nullificado en 3.1, no es categórico string
+                      - "Url_is_missing"      # binaria, no categórica
+                      - "AlertTitle_is_missing" # binaria, no categórica
+                  output: "3.2.categorical_noise.rare_grouping.json"
                   notes: >
-                    Mantiene solo categorías con >=200 apariciones. Agrupa raras como
-                    'Blob'(7), 'CredentialStealing'(8). Adecuado para clustering.
-            # ========================
-            # METHOD 5: DUPLICATES
-            # ========================
+                    Procesa columnas object reales: Category, EntityType, EvidenceRole,
+                    ResourceType, Roles, AntispamDirection, SuspicionLevel, LastVerdict,
+                    OSFamily (post-sentinel_cleanup). Excluye BIGINTs nullificados y
+                    flags binarias.
+
             duplicate_handling:
               enabled: true
               techniques:
-                exact_duplicates:                # Única técnica necesaria
+                exact_duplicates:
                   enabled: true
                   params:
-                    subset: null                 # Todas las columnas (después de imputación/rare grouping)
-                    keep: "first"                # Conservar la primera ocurrencia
+                    subset: null
+                    keep: "first"
                   output: "3.2.duplicate_handling.exact_duplicates.removed.json"
-                  notes: >
-                    Elimina filas idénticas en todas las columnas. Aplica después de
-                    imputación y rare grouping. Phase 2 mostró 53% duplicados basados
-                    en Id, pero esto puede deberse a Id repetidos; exact_duplicates
-                    con subset=null es más preciso para clustering.
-          # ========================
-          # OUTPUTS FINAL STEP 3.2
-          # ========================
+
           output_artifacts:
             imputation_consolidated: "3.2.data_cleaning.imputation_summary.json"
             missing_before_after: "3.2.data_cleaning.missing_comparison.png"
-            outlier_consolidated: "3.2.data_cleaning.outlier_summary.json"       # ← nuevo
+            outlier_consolidated: "3.2.data_cleaning.outlier_summary.json"
             categorical_consolidated: "3.2.data_cleaning.categorical_summary.json"
-            duplicate_consolidated: "3.2.data_cleaning.duplicate_summary.json"  # ← nuevo
+            duplicate_consolidated: "3.2.data_cleaning.duplicate_summary.json"
             cleaning_summary: "3.2.data_cleaning.cleaning_report.json"
         # ──────────────────────────────────────────────────────────────────────
         # STEP 3.3: DATA TRANSFORMATION
@@ -351,7 +282,8 @@ clustering_pipeline_config:
         step_3_3_data_transformation:
           enabled: true
           methods:
-            # 1. Primero: feature engineering (groupby por IncidentId)
+
+            # 1. Feature engineering — PRIMERO para crear columnas antes de escalar
             feature_engineering:
               enabled: true
               techniques:
@@ -371,7 +303,20 @@ clustering_pipeline_config:
                         method: "nunique"
                   output: "3.3.feature_engineering.groupby_aggregations.stats.json"
 
-            # 2. Luego: numeric_scaling para las nuevas features continuas
+            # 2. Temporal — ANTES de numeric_scaling para que Timestamp_hour exista
+            temporal_features:
+              enabled: true
+              techniques:
+                datetime_extraction:
+                  enabled: true
+                  params:
+                    column: "Timestamp"
+                    extract:
+                      - "hour"
+                    drop_original: true
+                  output: "3.3.temporal_features.datetime_extraction.distribution.png"
+
+            # 3. Numeric scaling — engineeradas + Timestamp_hour juntas
             numeric_scaling:
               enabled: true
               techniques:
@@ -382,9 +327,11 @@ clustering_pipeline_config:
                       - "n_evidences_per_incident"
                       - "n_alerts_per_incident"
                       - "n_unique_entity_types"
+                      - "Timestamp_hour"       # rango 0-23 → escalar para KMeans
+                  fit_on: "train"
                   output: "3.3.numeric_scaling.standard_scaling.statistics.json"
 
-            # 3. Feature scaling (frequency_encoding para pseudo-categóricas)
+            # 4. Frequency encoding — cardinalidad alta, fit en train
             feature_scaling:
               enabled: true
               techniques:
@@ -397,14 +344,15 @@ clustering_pipeline_config:
                       - "EvidenceRole"
                       - "OSFamily"
                       - "DetectorId"
-                      - "AlertTitle"
+                      - "AlertTitle_real"     # ← _real confirmada en bigint_cleanup
                       - "OrgId"
-                      - "AccountUpn_real"
-                      - "IpAddress_real"
+                      - "AccountUpn"          # ← BIGINT original, nullified_count=0
+                      - "IpAddress"           # ← BIGINT original, nullified_count=0
                     fillna_value: 0
+                    fit_on: "train"
                   output: "3.3.feature_scaling.frequency_encoding.dictionary.json"
 
-            # 4. Encoding ordinal
+            # 5. Ordinal encoding — orden semántico explícito
             encoding:
               enabled: true
               techniques:
@@ -415,35 +363,50 @@ clustering_pipeline_config:
                       - "SuspicionLevel"
                       - "LastVerdict"
                     categories:
-                      SuspicionLevel: ["Low", "Medium", "High"]
-                      LastVerdict: ["Unknown", "Clean", "Suspicious", "Malicious"]
+                      SuspicionLevel: [ "Low", "Medium", "High" ]
+                      LastVerdict: [ "Unknown", "Clean", "Suspicious", "Malicious" ]
+                    leakage_risk: "high"      # confirmado suspect_leakage fase 2
                   output: "3.3.encoding.ordinal_encoding.mappings.json"
 
-            # 5. Temporal features
-            temporal_features:
+            # 6. Column dropping — post-aggregation y sin señal
+            column_dropping:
               enabled: true
               techniques:
-                datetime_extraction:
+                explicit_drop:
                   enabled: true
                   params:
-                    column: "Timestamp"
-                    extract:
-                      - "hour"
-                    drop_original: true
-                  output: "3.3.temporal_features.datetime_extraction.distribution.png"
-          # ========================
-          # OUTPUTS FINAL STEP 3.3
-          # ========================
+                    columns:
+                      - "Url"                   # BIGINT nullificado, Url_real es la útil
+                      - "AlertTitle"            # BIGINT nullificado, AlertTitle_real es la útil
+                      - "AlertTitle_is_missing" # redundante: AlertTitle ya nullificado
+                      - "IncidentId"            # clave de aggregation, no feature
+                      - "AlertId"               # usada en aggregation, no feature
+                    reason: "identifier_or_redundant_post_aggregation"
+                  output: "3.3.column_dropping.dropped_columns.json"
+
+            # 7. Missing flags — señal binaria para clustering
+            missing_flags:
+              enabled: true
+              techniques:
+                passthrough:
+                  enabled: true
+                  params:
+                    columns:
+                      - "LastVerdict_is_missing"
+                      - "SuspicionLevel_is_missing"
+                      - "Url_is_missing"        # ausencia de URL puede discriminar TP/FP
+                    note: "Binary 0/1 — no scaling needed, preserved as clustering signal"
+                  output: "3.3.missing_flags.passthrough.json"
           output_artifacts:
             scaling_consolidated: "3.3_data_transformation.scaling_summary.json"
-            frequency_encoding_stats: "3.3_data_transformation.frequency_encoding.dictionary.json"   # ← NUEVO
+            frequency_encoding_stats: "3.3_data_transformation.frequency_encoding.dictionary.json"
             encoding_consolidated: "3.3_data_transformation.encoding_summary.json"
-            ordinal_encoding_mappings: "3.3_data_transformation.ordinal_encoding.mappings.json"       # ← NUEVO (más específico)
+            ordinal_encoding_mappings: "3.3_data_transformation.ordinal_encoding.mappings.json"
             engineered_features_stats: "3.3_data_transformation.engineering_stats.json"
             temporal_distribution: "3.3_data_transformation.temporal_viz.png"
-            temporal_stats: "3.3_data_transformation.hour_distribution.json"                          # ← NUEVO (complemento numérico)
-            columns_dropped: "3.3_data_transformation.dropped_columns.json"                           # ← NUEVO (Timestamp original)
-            final_feature_schema: "3.3_data_transformation.final_feature_schema.json"                 # ← NUEVO (lista final de columnas con dtypes)
+            temporal_stats: "3.3_data_transformation.hour_distribution.json"
+            columns_dropped: "3.3_data_transformation.dropped_columns.json"
+            final_feature_schema: "3.3_data_transformation.final_feature_schema.json"
             transformation_summary: "3.3_data_transformation.transformation_report.json"
         # ──────────────────────────────────────────────────────────────────────
         # STEP 3.5: DATA INTEGRATION
@@ -488,64 +451,119 @@ clustering_pipeline_config:
         # STEP 3.5: DATA FORMATTING
         # ──────────────────────────────────────────────────────────────────────
         step_3_5_data_formatting:
-          # Convert prepared data to final format (numpy arrays, parquet files).
-          # Save train and test parquets. Serialize transformers pipeline for Stage 4-5.
           enabled: true
           methods:
-            # ========================
-            # METHOD 1: DATA SPLIT
-            # ========================
+
             data_split:
               enabled: true
               techniques:
                 no_split_clustering:
                   enabled: true
-                  params: { }
-                # RESULTADO: Un log confirmando que se mantuvo la separación por la columna 'source'.
-            # ========================
-            # METHOD 2: DATASET FORMATTING
-            # ========================
+                  params:
+                    random_state: 7          # ← CORREGIDO: consistente con random_seed global
+                    shuffle: true
+                    strategy: "stratified"
+                    stratify_column: "IncidentGrade" # drop post-shuffle antes de array_conversion
+                  output: "3.5.data_formatting.data_split.no_split_clustering.json"
+
             dataset_formatting:
-              enabled: false # update from true -> false
+              enabled: true
               techniques:
+
                 x_y_separation:
-                  enabled: false         # NOT applicable to clustering
-                  params: { target_col: null } # params: { target_col: "${target_col}" }
+                  enabled: false
+                  params: { target_col: null }
+
                 type_casting:
                   enabled: true
-                  params: { }
-                # RESULTADO: Reporte de dtypes (asegurar que todo sea float/int para el modelo).
+                  params:
+
+                    # 1. Alineación train/test — drop columnas extra en test
+                    drop_columns:
+                      - "Usage"              # extra en test, confirmado fase 2
+                      - "IncidentGrade"      # drop post-shuffle, antes de array_conversion
+
+                    # 2. Drop BIGINTs sin señal semántica para clustering
+                    drop_bigint_no_signal:
+                      - "DeviceId"
+                      - "Sha256"
+                      - "AccountSid"
+                      - "AccountObjectId"
+                      - "AccountName"
+                      - "DeviceName"
+                      - "NetworkMessageId"
+                      - "RegistryKey"
+                      - "RegistryValueName"
+                      - "RegistryValueData"
+                      - "ApplicationId"
+                      - "ApplicationName"
+                      - "OAuthApplicationId"
+                      - "FileName"
+                      - "FolderPath"
+                      - "ResourceIdName"
+                      - "CountryCode"
+                      - "State"
+                      - "City"
+                      - "OSVersion"
+                      - "Url_real"
+
+                    # 3. Columnas object → frequency encoding antes de array_conversion
+                    object_frequency_encode:
+                      - "ResourceType"
+                      - "Roles"
+                      - "AntispamDirection"
+                    fit_on: "train"
+
+                    # 4. Float64 → Float32
+                    float64_to_float32:
+                      - "n_evidences_per_incident"
+                      - "n_alerts_per_incident"
+                      - "n_unique_entity_types"
+                      - "Timestamp_hour"
+                      - "IpAddress"
+                      - "Category"
+                      - "EntityType"
+                      - "EvidenceRole"
+                      - "OSFamily"
+                      - "DetectorId"
+                      - "AlertTitle_real"
+                      - "OrgId"
+                      - "AccountUpn"
+
+                    # 5. Flags binarias → bool
+                    flag_to_bool:
+                      - "Url_is_missing"
+                      - "LastVerdict_is_missing"
+                      - "SuspicionLevel_is_missing"
+                      # AlertTitle_is_missing REMOVIDA — dropeada en 3.3
+
+                    # 6. Ordinales int32 — mantener como int32
+                    # SuspicionLevel y LastVerdict ya son int32, no necesitan cast
+                  output: "3.5.data_formatting.dataset_formatting.type_casting.json"
+
                 array_conversion:
-                  enabled: false
-                  params: { to_numpy: false }
+                  enabled: true
+                  params:
+                    to_numpy: true
+                    unified_dtype: "float32"  # bool y int32 se castean a float32 aquí
+                  output: "3.5.data_formatting.dataset_formatting.array_conversion.json"
+
                 sparse_dense_format:
                   enabled: false
-                  params: { format: "sparse" }
+
                 reshaping:
                   enabled: false
-                  params: { }
-          # ========================
-          # OUTPUTS FINAL STEP 3.5
-          # ========================
+
           output_artifacts:
             # --- DATA FINAL ---
-            train_prepared: "3.5.data_formatting.a_train_prepared_150k.parquet"
-            test_prepared: "3.5.data_formatting.b_test_prepared_50k.parquet"
-
-            # --- GROUND TRUTH PARA VALIDACIÓN ---
-            train_labels: "3.5.data_formatting.c_train_incident_grade.npy"
-            test_labels: "3.5.data_formatting.d_test_incident_grade.npy"
-
+            train_prepared: "3.5.data_formatting.a_train_prepared.parquet"
+            test_prepared: "3.5.data_formatting.b_test_prepared.parquet"
             # --- EL CEREBRO DEL PIPELINE ---
             transformers_pipeline: "3.5.data_formatting.e_transformers_pipeline.pkl"
-
-            # --- METADATOS DE CONTROL ---
+            # --- METADATOS ---
             data_schema_final: "3.5.data_formatting.f_final_schema_report.json"
             pipeline_integrity_check: "3.5.data_formatting.g_serialization_log.json"
-#
-#            # Formato
-#            format: "parquet"
-#            compression: "snappy"
+
 
     # ════════════════════════════════════════════════════════════════════════════
     # PHASE 4: MODELING

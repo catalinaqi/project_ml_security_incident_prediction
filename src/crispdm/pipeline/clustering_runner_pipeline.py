@@ -17,7 +17,9 @@ from crispdm.phase.phase2_understanding_runner_phase import (
     run_exploratory_analysis,
     run_initial_data_collection,
 )
-from crispdm.phase.phase3_preparation_runner_phase import run_step_3_1
+from crispdm.phase.phase3_preparation_runner_phase import (run_step_3_1, run_step_3_2,
+                                                           run_step_3_3,
+                                                           run_step_3_5)
 log = get_logger(__name__)
 
 
@@ -207,26 +209,26 @@ def run_clustering_pipeline_phase3_1(ctx: ClusteringRunContext) -> ClusteringRun
     return ctx
 
 def run_clustering_pipeline_phase3_2(ctx: ClusteringRunContext) -> ClusteringRunContext:
-    """Phase 3.2 - Data Cleaning (STUB)."""
+    """Phase 3.2 - Data Cleaning."""
     log.info("[3.2] START run_id=%s", ctx.run_id)
-    # ctx = run_data_cleaning(ctx)  # TODO: implement
-    log.info("[3.2] DONE (stub)")
+    ctx = run_step_3_2(ctx)
+    log.info("[3.2] DONE train shape=%s", ctx.df_train.shape if ctx.df_train is not None else None)
     return ctx
 
 
 def run_clustering_pipeline_phase3_3(ctx: ClusteringRunContext) -> ClusteringRunContext:
     """Phase 3.3 - Data Transformation (STUB)."""
     log.info("[3.3] START run_id=%s", ctx.run_id)
-    # ctx = run_data_transformation(ctx)  # TODO: implement
-    log.info("[3.3] DONE (stub)")
+    ctx = run_step_3_3(ctx)
+    log.info("[3.3] DONE train shape=%s", ctx.df_train.shape)
     return ctx
 
 
 def run_clustering_pipeline_phase3_5(ctx: ClusteringRunContext) -> ClusteringRunContext:
-    """Phase 3.5 - Data Formatting (STUB)."""
+    """Phase 3.5 - Data Formatting."""
     log.info("[3.5] START run_id=%s", ctx.run_id)
-    # ctx = run_data_formatting(ctx)  # TODO: implement
-    log.info("[3.5] DONE (stub)")
+    ctx = run_step_3_5(ctx)
+    log.info("[3.5] DONE train shape=%s", ctx.df_train.shape if ctx.df_train is not None else None)
     return ctx
 
 

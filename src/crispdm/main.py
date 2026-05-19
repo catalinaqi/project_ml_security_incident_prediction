@@ -11,6 +11,9 @@ from crispdm.api.execution_facade_api import (
     run_phase2_3,
     run_phase2_4,
     run_phase3_1,
+    run_phase3_2,
+    run_phase3_3,
+    run_phase3_5,
 )
 from crispdm.common.path_service_common import find_project_root
 
@@ -137,8 +140,36 @@ def main():
         if ctx.df_train is not None:
             logger.info(f"Train data after Phase 3.1: {len(ctx.df_train):,} rows x {len(ctx.df_train.columns)} cols")
 
+        # ── Phase 3.2 ────────────────────────────────────────────────────
+        logger.info("\n" + "-" * 70)
+        logger.info("Step 3.2: data_cleaning")
+        logger.info("-" * 70)
+        ctx = run_phase3_2(ctx)
+        if ctx.df_train is not None:
+            logger.info(f"Train data after Phase 3.2: {len(ctx.df_train):,} rows x {len(ctx.df_train.columns)} cols")
+
+        # ── Phase 3.3 ────────────────────────────────────────────────────
+        logger.info("\n" + "-" * 70)
+        logger.info("Step 3.3: data_transformation")
+        logger.info("-" * 70)
+        ctx = run_phase3_3(ctx)
+        if ctx.df_train is not None:
+            logger.info(f"Train data after Phase 3.3: {len(ctx.df_train):,} rows x"
+                        f" {len(ctx.df_train.columns)} cols")
+
+        # ── Phase 3.5 ────────────────────────────────────────────────────
+        logger.info("\n" + "-" * 70)
+        logger.info("Step 3.3: data_transformation")
+        logger.info("-" * 70)
+        ctx = run_phase3_5(ctx)
+        if ctx.df_train is not None:
+            logger.info(f"Train data after Phase 3.5: {len(ctx.df_train):,} rows x"
+                        f" {len(ctx.df_train.columns)} cols")
+
+        # ────────────────────────────────────────────────────
         logger.info("\n" + "=" * 70)
-        logger.info("PIPELINE EXECUTED SUCCESSFULLY (Phase 2 + Phase 3.1)")
+        logger.info("PIPELINE EXECUTED SUCCESSFULLY (Phase 2 + Phase 3.1 + Phase 3.2 "
+                    "+ Phase 3.3 + Phase 3.5)")
         logger.info("=" * 70)
         logger.info(f"Run directory: {ctx.run_dir}")
 
