@@ -20,6 +20,10 @@ from crispdm.phase.phase2_understanding_runner_phase import (
 from crispdm.phase.phase3_preparation_runner_phase import (run_step_3_1, run_step_3_2,
                                                            run_step_3_3,
                                                            run_step_3_5)
+
+from crispdm.phase.phase4_modeling_runner_phase import (run_step_4_1,run_step_4_2,
+                                                        run_step_4_3,run_step_4_4,run_step_4_5)
+
 log = get_logger(__name__)
 
 
@@ -240,32 +244,39 @@ def run_clustering_pipeline_phase3_5(ctx: ClusteringRunContext) -> ClusteringRun
 def run_clustering_pipeline_phase4_1(ctx: ClusteringRunContext) -> ClusteringRunContext:
     """Phase 4.1 - Algorithm Selection (STUB)."""
     log.info("[4.1] START run_id=%s", ctx.run_id)
-    # ctx = run_algorithm_selection(ctx)  # TODO: implement
-    log.info("[4.1] DONE (stub)")
+    ctx = run_step_4_1(ctx)  # TODO: implement
+    log.info("[4.1] DONE")
     return ctx
 
 
 def run_clustering_pipeline_phase4_2(ctx: ClusteringRunContext) -> ClusteringRunContext:
-    """Phase 4.2 - Model Training (STUB)."""
+    """Phase 4.2 - Pretrain Analysis (k‑NN distance)."""
     log.info("[4.2] START run_id=%s", ctx.run_id)
-    # ctx = run_model_training(ctx)  # TODO: implement
-    log.info("[4.2] DONE (stub)")
+    ctx = run_step_4_2(ctx)
+    log.info("[4.2] DONE")
     return ctx
 
-
 def run_clustering_pipeline_phase4_3(ctx: ClusteringRunContext) -> ClusteringRunContext:
-    """Phase 4.3 - Test Design (STUB)."""
+    """Phase 4.3 - Model Training (STUB)."""
     log.info("[4.3] START run_id=%s", ctx.run_id)
-    # ctx = run_test_design(ctx)  # TODO: implement
+    ctx = run_step_4_3(ctx)  # TODO: implement
     log.info("[4.3] DONE (stub)")
     return ctx
 
 
 def run_clustering_pipeline_phase4_4(ctx: ClusteringRunContext) -> ClusteringRunContext:
-    """Phase 4.4 - Model Evaluation (STUB)."""
+    """Phase 4.4 - Test Design (STUB)."""
     log.info("[4.4] START run_id=%s", ctx.run_id)
-    # ctx = run_model_evaluation(ctx)  # TODO: implement
+    ctx = run_step_4_4(ctx)  # TODO: implement
     log.info("[4.4] DONE (stub)")
+    return ctx
+
+
+def run_clustering_pipeline_phase4_5(ctx: ClusteringRunContext) -> ClusteringRunContext:
+    """Phase 4.5 - Model Evaluation (STUB)."""
+    log.info("[4.5] START run_id=%s", ctx.run_id)
+    ctx = run_step_4_5(ctx)  # TODO: implement
+    log.info("[4.5] DONE (stub)")
     return ctx
 
 

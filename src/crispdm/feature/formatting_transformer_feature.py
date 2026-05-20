@@ -258,4 +258,78 @@ def array_conversion(
         X_test.shape if X_test is not None else None,
         unified_dtype,
     )
-    return X_train, X_test, report# src/crispdm/feature/formatting_transformer_feature.py
+    return X_train, X_test, report
+
+
+# ------------------------------------------------------------------
+# 4) Save auxiliary labels (e.g. IncidentGrade) before they are dropped
+# ------------------------------------------------------------------
+def save_auxiliary_labels(
+    df_train: pd.DataFrame,
+    df_test: Optional[pd.DataFrame],
+    tech_cfg: dict[str, Any],
+) -> tuple[
+    Optional[pd.DataFrame],
+    Optional[pd.DataFrame],
+    dict[str, Any],
+]:
+    """Extract and encode a label column, returning separate DataFrames.
+
+    The original DataFrames are NOT modified. The returned DataFrames contain
+    a single column ``label`` with the encoded values. The caller is responsible
+    for persistence.
+    """
+    if not tech_cfg.get("enabled", True):
+        return None, None, {"applied": False}
+
+    params = tech_cfg.get("params", {})
+    column = params.get("column", "IncidentGrade")
+    encoding: dict = params.get("encoding", {})
+    save_train = params.get("save_train", False)
+    save_test = params.get("save_test", False)
+
+    # Validate column exists
+    if column not in df_train.columns:
+        log.warning("[save_auxiliary_labels] column '%s' not in train – returning None", column)
+        return None, None, {"applied": False, "column": column, "error": "column_missing"}
+
+    # Encode train labels
+    labels_train = df_train[[column]].copy()
+    labels_train["label"] = labels_train[column].map(encoding)
+    # Handle any unmapped values: assign -1 or drop? Use -1.
+    if labels_train["label"].isna().any():
+        n_unmapped = int(labels_train["label"].isna().sum())
+        log.warning("[save_auxiliary_labels] %d train rows had unmapped '%s' values – set to -1",
+                     n_unmapped, column)
+        labels_train["label"] = labels_train["label"].fillna(-1).astype(int)
+    else:
+        labels_train["label"] = labels_train["label"].astype(int)
+    labels_train = labels_train[["label"]]
+
+    labels_test = None
+    if df_test is not None and column in df_test.columns:
+        labels_test = df_test[[column]].copy()
+        labels_test["label"] = labels_test[column].map(encoding)
+        if labels_test["label"].isna().any():
+            n_unmapped = int(labels_test["label"].isna().sum())
+            log.warning("[save_auxiliary_labels] %d test rows had unmapped '%s' values – set to -1",
+                         n_unmapped, column)
+            labels_test["label"] = labels_test["label"].fillna(-1).astype(int)
+        else:
+            labels_test["label"] = labels_test["label"].astype(int)
+        labels_test = labels_test[["label"]]
+    elif df_test is not None:
+        log.warning("[save_auxiliary_labels] column '%s' not in test – returning None for test", column)
+
+    report = {
+        "applied": True,
+        "column": column,
+        "encoding": encoding,
+        "train_shape": list(labels_train.shape) if labels_train is not None else None,
+        "test_shape": list(labels_test.shape) if labels_test is not None else None,
+        "save_train": save_train,
+        "save_test": save_test,
+    }
+    log.info("[save_auxiliary_labels] extracted labels from '%s': train=%s",
+             column, labels_train.shape if labels_train is not None else None)
+    return labels_train, labels_test, report

@@ -3,7 +3,8 @@ from typing import Type, Dict, Callable, Any, Optional
 import importlib
 
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor
+from sklearn.ensemble import (RandomForestClassifier, GradientBoostingClassifier,
+                              RandomForestRegressor,GradientBoostingRegressor)
 from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
 from sklearn.svm import SVC, SVR
 from xgboost import XGBClassifier, XGBRegressor

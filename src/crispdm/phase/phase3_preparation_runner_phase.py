@@ -42,6 +42,7 @@ from crispdm.feature.formatting_transformer_feature import (
     no_split_clustering,
     type_casting,
     array_conversion,
+    save_auxiliary_labels,
 )
 
 log = get_logger(__name__)
@@ -450,7 +451,40 @@ def run_step_3_5(ctx: RunContext) -> RunContext:
         log.info("[3.5] no_split_clustering disabled")
 
     # -----------------------------------------------------------------
-    # 2. Dataset formatting — type_casting
+    # 2. Save auxiliary labels (IncidentGrade) before they are dropped
+    # -----------------------------------------------------------------
+    aux_tech = (
+        methods.get("dataset_formatting", {})
+        .get("techniques", {})
+        .get("save_auxiliary_labels", {})
+    )
+    if aux_tech.get("enabled", True):
+        labels_train, labels_test, report_aux = save_auxiliary_labels(
+            ctx.df_train, ctx.df_test, aux_tech
+        )
+        # Persist parquet files if requested
+        if labels_train is not None and aux_tech.get("params", {}).get("save_train", True):
+            out_train = aux_tech.get("output_train")
+            if out_train:
+                labels_train.to_parquet(ctx.phase3_dir / out_train, index=False)
+                log.info("[3.5] saved train auxiliary labels to %s (shape=%s)",
+                         out_train, labels_train.shape)
+        if labels_test is not None and aux_tech.get("params", {}).get("save_test", True):
+            out_test = aux_tech.get("output_test")
+            if out_test:
+                labels_test.to_parquet(ctx.phase3_dir / out_test, index=False)
+                log.info("[3.5] saved test auxiliary labels to %s (shape=%s)",
+                         out_test, labels_test.shape)
+        # Store in artifacts for Phase 4
+        ctx.artifacts["auxiliary_labels_train"] = labels_train
+        ctx.artifacts["auxiliary_labels_test"] = labels_test
+        # Optionally save a JSON summary
+        save_json(report_aux, ctx.phase3_dir / "3.5.dataset_formatting.save_auxiliary_labels.report.json")
+    else:
+        log.info("[3.5] save_auxiliary_labels disabled")
+
+    # -----------------------------------------------------------------
+    # 3. Dataset formatting — type_casting
     # -----------------------------------------------------------------
     cast_tech = (
         methods.get("dataset_formatting", {})
@@ -467,7 +501,7 @@ def run_step_3_5(ctx: RunContext) -> RunContext:
         log.info("[3.5] type_casting disabled")
 
     # -----------------------------------------------------------------
-    # 3. Dataset formatting — array_conversion (numpy)
+    # 4. Dataset formatting — array_conversion (numpy)
     # -----------------------------------------------------------------
     array_tech = (
         methods.get("dataset_formatting", {})
@@ -490,7 +524,7 @@ def run_step_3_5(ctx: RunContext) -> RunContext:
         log.info("[3.5] array_conversion disabled")
 
     # -----------------------------------------------------------------
-    # 4. Save final schema report (output_artifacts)
+    # 5. Save final schema report (output_artifacts)
     # -----------------------------------------------------------------
     if path := output_artifacts.get("data_schema_final"):
         schema = {
@@ -508,7 +542,7 @@ def run_step_3_5(ctx: RunContext) -> RunContext:
             "test_shape_after": list(ctx.df_test.shape) if ctx.df_test is not None else None,
             "numpy_converted": "X_train" in ctx.artifacts,
             "techniques_applied": [
-                k for k in ["no_split_clustering", "type_casting", "array_conversion"]
+                k for k in ["no_split_clustering", "save_auxiliary_labels", "type_casting", "array_conversion"]
                 if enabled(
                     methods.get("data_split" if k == "no_split_clustering" else "dataset_formatting", {})
                     .get("techniques", {})

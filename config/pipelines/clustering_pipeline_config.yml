@@ -464,25 +464,32 @@ clustering_pipeline_config:
                     shuffle: true
                     strategy: "stratified"
                     stratify_column: "IncidentGrade" # drop post-shuffle antes de array_conversion
-                  output: "3.5.data_formatting.data_split.no_split_clustering.json"
-
+                  output: "3.5.data_split.no_split_clustering.json"
             dataset_formatting:
               enabled: true
               techniques:
-
                 x_y_separation:
                   enabled: false
                   params: { target_col: null }
-
+                save_auxiliary_labels: # NUEVO — post-shuffle, ANTES del drop de IncidentGrade
+                  enabled: true
+                  params:
+                    column: "IncidentGrade"
+                    encoding:
+                      FalsePositive: 0
+                      BenignPositive: 1
+                      TruePositive: 2
+                    save_train: true
+                    save_test: true
+                  output_train: "3.5.dataset_formatting.save_auxiliary_labels.c_incident_grade_labels_train.parquet"
+                  output_test: "3.5.dataset_formatting.save_auxiliary_labels.d_incident_grade_labels_test.parquet"
                 type_casting:
                   enabled: true
                   params:
-
                     # 1. Alineación train/test — drop columnas extra en test
                     drop_columns:
                       - "Usage"              # extra en test, confirmado fase 2
                       - "IncidentGrade"      # drop post-shuffle, antes de array_conversion
-
                     # 2. Drop BIGINTs sin señal semántica para clustering
                     drop_bigint_no_signal:
                       - "DeviceId"
@@ -506,14 +513,12 @@ clustering_pipeline_config:
                       - "City"
                       - "OSVersion"
                       - "Url_real"
-
                     # 3. Columnas object → frequency encoding antes de array_conversion
                     object_frequency_encode:
                       - "ResourceType"
                       - "Roles"
                       - "AntispamDirection"
                     fit_on: "train"
-
                     # 4. Float64 → Float32
                     float64_to_float32:
                       - "n_evidences_per_incident"
@@ -529,7 +534,6 @@ clustering_pipeline_config:
                       - "AlertTitle_real"
                       - "OrgId"
                       - "AccountUpn"
-
                     # 5. Flags binarias → bool
                     flag_to_bool:
                       - "Url_is_missing"
@@ -539,18 +543,15 @@ clustering_pipeline_config:
 
                     # 6. Ordinales int32 — mantener como int32
                     # SuspicionLevel y LastVerdict ya son int32, no necesitan cast
-                  output: "3.5.data_formatting.dataset_formatting.type_casting.json"
-
+                  output: "3.5.dataset_formatting.type_casting.json"
                 array_conversion:
                   enabled: true
                   params:
                     to_numpy: true
                     unified_dtype: "float32"  # bool y int32 se castean a float32 aquí
-                  output: "3.5.data_formatting.dataset_formatting.array_conversion.json"
-
+                  output: "3.5.dataset_formatting.array_conversion.json"
                 sparse_dense_format:
                   enabled: false
-
                 reshaping:
                   enabled: false
 
@@ -560,6 +561,10 @@ clustering_pipeline_config:
             test_prepared: "3.5.data_formatting.b_test_prepared.parquet"
             # --- EL CEREBRO DEL PIPELINE ---
             transformers_pipeline: "3.5.data_formatting.e_transformers_pipeline.pkl"
+
+            # NUEVO: Solo labels + ID para alineación (no features)
+            #auxiliary_labels_train: "3.5.data_formatting.auxiliary_labels_train.parquet"
+
             # --- METADATOS ---
             data_schema_final: "3.5.data_formatting.f_final_schema_report.json"
             pipeline_integrity_check: "3.5.data_formatting.g_serialization_log.json"
@@ -571,10 +576,15 @@ clustering_pipeline_config:
     phase4_data_modeling:
       enabled: true
       objective: "Train and optimize clustering algorithms"
-
       read_strategy:
-        input_source: "3.5.data_formatting.train_prepared.parquet"
-
+        # Features para entrenamiento (X)
+        input_source: "3.5.data_formatting.a_train_prepared.parquet"
+        #  Labels para validación externa (Y)
+        auxiliary_labels: "3.5.dataset_formatting.save_auxiliary_labels.c_incident_grade_labels_train.parquet"
+        input_shape:
+          - 198886
+          - 18
+        dtype: float32
       steps:
         # ──────────────────────────────────────────────────────────────────────
         # STEP 4.1: ALGORITHM SELECTION
@@ -582,28 +592,55 @@ clustering_pipeline_config:
         step_4_1_algorithm_selection:
           enabled: true
           description: "Select clustering techniques to train"
-
           methods:
             algorithm_selection:
               techniques:
-                # QUESTION: ¿Habilitar KMeans, DBSCAN, ambos, o agregar Hierarchical?
                 kmeans:
-                  enabled: true  # TODO: Choose
+                  enabled: true
                   priority: 1
-                  # OUTPUT: 4.1.algorithm_selection.kmeans.json
-
+                  output: "4.1.algorithm_selection.kmeans.json"
                 dbscan:
-                  enabled: false  # TODO: Choose
+                  enabled: true
                   priority: 2
-                  # OUTPUT: 4.1.algorithm_selection.dbscan.json
-
+                  output: "4.1.algorithm_selection.dbscan.json"
+          output_artifacts:
+            algorithms_selected: "4.1.algorithm_selection.summary.json"  # ya existe implícito en kmeans+dbscan json
+        step_4_2_pretrain_analysis:
+          enabled: true
+          description: "k-NN distance analysis para eps de DBSCAN"
+          depends_on: "step_4_1_algorithm_selection"
+          methods:
+            knn_distance_analysis:
+              techniques:
+                knn_distances:
+                  enabled: true
+                  params:
+                    k: 5
+                    metric: ["euclidean"]
+                    sample_size: 20000
+                    random_state: 7
+                    percentiles:
+                      - 10
+                      - 25
+                      - 50
+                      - 75
+                      - 90
+                      - 95
+                      - 99
+                  output_stats: "4.2.pretrain_analysis.knn_distances.stats.json"
+                  output_plot: "4.2.pretrain_analysis.knn_distances.elbow.png"
+                  output_eps_suggested: "4.2.pretrain_analysis.eps_suggested.json"
+          output_artifacts:
+            eps_recommendation: "4.2.pretrain_analysis.eps_recommendation.json"
+            knn_distance_summary: "4.2.pretrain_analysis.knn_distance_summary.json"
+            sample_metadata: "4.2.pretrain_analysis.sample_metadata.json"
+            eps_validation_preview: "4.2.pretrain_analysis.eps_validation_preview.json"
         # ──────────────────────────────────────────────────────────────────────
         # STEP 4.2: MODEL TRAINING
         # ──────────────────────────────────────────────────────────────────────
-        step_4_2_model_training:
+        step_4_3_model_training:
           enabled: true
           description: "Train models with hyperparameter tuning"
-
           methods:
             model_training:
               techniques:
@@ -612,8 +649,7 @@ clustering_pipeline_config:
                   params:
                     fit_best_only: true
                     store_all_models: false
-                  # OUTPUT: 4.2.model_training.{technique}.pkl
-
+                  output: "4.3.model_training.fit.pkl"
                 hyperparameter_tuning:
                   enabled: true
                   params:
@@ -621,73 +657,146 @@ clustering_pipeline_config:
                     scoring: "silhouette"  # TODO: silhouette, davies_bouldin, calinski
                     refit: true
 
-                    # QUESTION: ¿Qué rangos de hiperparámetros explorar?
+                    # NUEVO — subsample solo para grid search, fit final sobre datos completos
+                    grid_search_sample_size: 30000
+                    random_state: 7
+
                     grids:
                       kmeans:
-                        n_clusters: []  # TODO: [2, 3, 4, 5, 6, 7, 8]
+                        n_clusters: [2, 3, 4]
                         init: ["k-means++"]
                         max_iter: [300]
-                        # OUTPUT: 4.2.model_training.kmeans.grid_results.json
+                        random_state: [7]
+                        output: "4.3.model_training.hyperparameter_tuning.kmeans.json"
 
                       dbscan:
-                        eps: []  # TODO: [0.3, 0.5, 0.8, 1.0]
-                        min_samples: []  # TODO: [3, 5, 10]
+                        eps: [0.05, 0.10, 0.27] # p50, p75, p90, p95, p99
+                        min_samples: [5, 10]  # TODO: [3, 5, 10]
                         metric: ["euclidean"]
-                        # OUTPUT: 4.2.model_training.dbscan.grid_results.json
-
+                        output: "4.3.model_training.hyperparameter_tuning.dbscan.json"
+          output_artifacts:
+            best_model: "4.3.model_training.best_model.pkl"
+            model_card: "4.3.model_training.model_card.json"
+            validation_metrics: "4.3.model_training.validation_metrics.json"
+            cluster_assignments_sample: "4.3.model_training.cluster_assignments_sample.parquet"
+            cluster_centroids: "4.3.model_training.cluster_centroids.parquet"
+            cluster_sizes: "4.3.model_training.cluster_sizes.json"
+            hp_search_summary: "4.3.model_training.hp_search_summary.json"
+            cluster_feature_profiles: "4.3.model_training.cluster_feature_profiles.json"
         # ──────────────────────────────────────────────────────────────────────
-        # STEP 4.3: TEST DESIGN GENERATION
+        # STEP 4.4: TEST DESIGN GENERATION
         # ──────────────────────────────────────────────────────────────────────
-        step_4_3_test_design:
+        step_4_4_test_design:
           enabled: true
           description: "Document evaluation strategy"
-          # OUTPUT: 4.3.test_design.evaluation_plan.json
-          # Expected: {metrics: [], validation_approach: ""}
+
+          # Expected configuration for validation
+          __expected__:
+            metrics:
+              - silhouette
+              - davies_bouldin
+              - calinski_harabasz
+              - adjusted_rand_index
+            validation_approach: "unsupervised + supervised ground truth comparison"
+            models_to_evaluate:
+              - kmeans_n2
+              - kmeans_n3
+            # AJUSTE: evaluar n_clusters=2 Y n_clusters=3 — diferencia silhouette 0.008 es insignificante, n=3 responde pregunta estratégica TP/BP/FP
+
+          output_artifacts:
+            evaluation_plan: "4.4.test_design.evaluation_plan.json"
 
         # ──────────────────────────────────────────────────────────────────────
-        # STEP 4.4: MODEL EVALUATION
+        # STEP 4.5: MODEL EVALUATION
         # ──────────────────────────────────────────────────────────────────────
-        step_4_4_model_evaluation:
+        step_4_5_model_evaluation:
           enabled: true
-          description: "Evaluate clustering quality"
+          description: "Evaluate clustering quality per model variant"
 
           methods:
             model_evaluation:
               techniques:
-                # Unsupervised Metrics
+                # ──────────────────────────────────────────────────────────────
+                # Métricas explícitas por modelo (kmeans_n2 vs kmeans_n3)
+                # ──────────────────────────────────────────────────────────────
                 silhouette:
                   enabled: true
+                  targets: [ "kmeans_n2", "kmeans_n3" ]
                   params:
-                    sample_size: 20000  # TODO: Adjust for performance
+                    sample_size: 20000
                     metric: "euclidean"
-                  # OUTPUT: 4.4.model_evaluation.silhouette.json
-                  # Expected: {score: float, per_cluster: []}
+                  output:
+                    kmeans_n2: "4.5.model_evaluation.silhouette.kmeans_n2.json"
+                    kmeans_n3: "4.5.model_evaluation.silhouette.kmeans_n3.json"
 
                 davies_bouldin:
                   enabled: true
-                  # OUTPUT: 4.4.model_evaluation.davies_bouldin.json
-                  # Expected: {score: float} (lower is better)
+                  targets: [ "kmeans_n2", "kmeans_n3" ]
+                  params: { }  # Parámetros por defecto (lower is better)
+                  output:
+                    kmeans_n2: "4.5.model_evaluation.davies_bouldin.kmeans_n2.json"
+                    kmeans_n3: "4.5.model_evaluation.davies_bouldin.kmeans_n3.json"
 
                 calinski_harabasz:
                   enabled: true
-                  # OUTPUT: 4.4.model_evaluation.calinski_harabasz.json
-                  # Expected: {score: float} (higher is better)
+                  targets: [ "kmeans_n2", "kmeans_n3" ]
+                  params: { }  # Parámetros por defecto (higher is better)
+                  output:
+                    kmeans_n2: "4.5.model_evaluation.calinski_harabasz.kmeans_n2.json"
+                    kmeans_n3: "4.5.model_evaluation.calinski_harabasz.kmeans_n3.json"
 
-                # QUESTION: ¿Incluir métricas supervisadas usando IncidentGrade?
                 adjusted_rand_index:
-                  enabled: false  # TODO: Enable if comparing with ground truth
+                  enabled: true
+                  targets: [ "kmeans_n2", "kmeans_n3" ]
                   params:
+                    ground_truth_source: "3.5.dataset_formatting.save_auxiliary_labels.c_incident_grade_labels_train.parquet"
+                    # 3.5.data_formatting.c_incident_grade_labels_train.parquet
                     ground_truth_column: "IncidentGrade"
-                  # OUTPUT: 4.4.model_evaluation.adjusted_rand_index.json
-                  # Expected: {ari_score: float, contingency_table: {}}
+                    encoding:
+                      "FalsePositive": 0
+                      "BenignPositive": 1
+                      "TruePositive": 2
+                  output:
+                    kmeans_n2: "4.5.model_evaluation.ari.kmeans_n2.json"
+                    kmeans_n3: "4.5.model_evaluation.ari.kmeans_n3.json"
 
-                # Cluster Profiling
                 cluster_profiling:
                   enabled: true
+                  targets: [ "kmeans_n2", "kmeans_n3" ]
                   params:
                     samples_per_cluster: 100
-                  # OUTPUT: 4.4.model_evaluation.cluster_profiling.json
-                  # Expected: {cluster_id: {size, centroid, top_features}}
+                    top_features: 10
+                    export_cluster_subsets: true        # NUEVO
+                    subset_sample_size: 5000            # filas por cluster exportadas
+                    subset_format: "parquet"
+                    # NUEVO: top_features — las 10 features más discriminantes por cluster, crítico para fase 5
+                  output:
+                    kmeans_n2: "4.5.model_evaluation.profiling.kmeans_n2.json"
+                    kmeans_n3: "4.5.model_evaluation.profiling.kmeans_n3.json"
+
+                dbscan:
+                  enabled: false
+                  # DESHABILITADO: 1093 clusters, scores negativos, no aporta a fase 5
+
+          # ──────────────────────────────────────────────────────────────────────
+          # Artifacts consolidados para consumo downstream (Fase 5 y Reporting)
+          # ──────────────────────────────────────────────────────────────────────
+          output_artifacts:
+            cluster_labels: "4.5.model_evaluation.cluster_labels.parquet"
+            # CRÍTICO — input directo fase 5, asignación cluster por fila (modelo ganador)
+
+            summary_comparison: "4.5.model_evaluation.summary.json"
+            # CRÍTICO — go/no-go fase 5, comparación directa n2 vs n3 con decisión automática
+
+            consolidated_ari: "4.5.model_evaluation.ari_consolidated.json"
+            # CRÍTICO — responde pregunta estratégica TP/BP/FP (unifica ambos modelos)
+
+            consolidated_profiling: "4.5.model_evaluation.profiling_consolidated.json"
+            # CRÍTICO — features dominantes por cluster para interpretación fase 5
+
+            cluster_subsets_n2: "4.5.model_evaluation.cluster_subsets.kmeans_n2.parquet"
+            cluster_subsets_n3: "4.5.model_evaluation.cluster_subsets.kmeans_n3.parquet"
+            # datasets pequeños por cluster — solicitado por profesor
 
     # ════════════════════════════════════════════════════════════════════════════
     # PHASE 5: EVALUATION & INTERPRETATION

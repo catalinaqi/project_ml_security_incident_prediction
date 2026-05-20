@@ -76,7 +76,12 @@ class TechniqueConfig(BaseModel):
     enabled: bool
     description: Optional[str] = None
     params: Dict[str, Any] = Field(default_factory=dict)
-    output: Optional[str] = None
+
+    #output: Optional[str] = None
+
+    # ──── MODIFICA ESTA LÍNEA ────
+    output: Optional[Union[Dict[str, str], str]] = None
+
 
     @field_validator("params", mode="before")
     @classmethod
