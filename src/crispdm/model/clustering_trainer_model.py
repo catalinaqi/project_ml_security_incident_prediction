@@ -326,6 +326,28 @@ def train_clustering_models(
         log.info("[trainer] '%s' optimization routine finalized. Scoring (%s): %.6f | Best configuration: %s",
                  algo_name, scoring, best_score, best_combo_params)
 
+
+    # ------------------------------------------------------------------
+    # Step 6b: Refit named variants declared in config (sin grid)
+    # ------------------------------------------------------------------
+    named_variants = fit_cfg.get("named_variants", {})
+    if named_variants:
+        max_rows = max_training_rows or fit_cfg.get("max_training_rows")
+        X_refit = X_train[:max_rows] if max_rows and max_rows < X_train.shape[0] else X_train
+        log.info("[trainer] fitting %d named variants on %d rows", len(named_variants), X_refit.shape[0])
+        for variant_key, variant_params in named_variants.items():
+            algo = variant_key.split("_")[0]  # "kmeans_n2" → "kmeans"
+            try:
+                model_class = get_model_class(problem_type, algo)
+                m = model_class(**variant_params)
+                m.fit(X_refit)
+                best_models[variant_key] = m
+                cluster_labels[variant_key] = m.labels_
+                log.info("[trainer] variant '%s' → %d clusters", variant_key, len(set(m.labels_)))
+            except Exception as e:
+                log.error("[trainer] variant '%s' failed: %s", variant_key, e)
+
+
     # ------------------------------------------------------------------
     # Step 7: Build final metadata
     # ------------------------------------------------------------------

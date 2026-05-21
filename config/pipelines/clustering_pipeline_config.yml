@@ -650,6 +650,9 @@ clustering_pipeline_config:
                     fit_best_only: true
                     store_all_models: false
                     max_training_rows: 30000 # add
+                    named_variants:
+                      kmeans_n2: { n_clusters: 2 }
+                      kmeans_n3: { n_clusters: 3 }
                   output: "4.3.model_training.fit.pkl"
                 hyperparameter_tuning:
                   enabled: true
@@ -805,43 +808,126 @@ clustering_pipeline_config:
     # ════════════════════════════════════════════════════════════════════════════
     phase5_evaluation_and_interpretation:
       enabled: true
-      objective: "Extract insights and validate business value"
+      objective: "Extract actionable security insights and validate business value of clustering results"
+
+      read_strategy:
+        train_features: "3.5.data_formatting.a_train_prepared.parquet"
+        train_labels: "3.5.dataset_formatting.save_auxiliary_labels.c_incident_grade_labels_train.parquet"
+        cluster_assignments: "4.3.model_training.cluster_assignments_sample.parquet"
+        best_models: "4.3.model_training.best_model.pkl"
+        profiling_n2: "4.5.model_evaluation.profiling.kmeans_n2.json"
+        profiling_n3: "4.5.model_evaluation.profiling.kmeans_n3.json"
+        evaluation_summary: "4.5.model_evaluation.summary.json"
+        ari_consolidated: "4.5.model_evaluation.ari_consolidated.json"
+        test_set_note: "Test set not used in unsupervised clustering — reserved for supervised deployment phase"
 
       steps:
-        # ──────────────────────────────────────────────────────────────────────
-        # STEP 5.1: KNOWLEDGE EXTRACTION
-        # ──────────────────────────────────────────────────────────────────────
+
         step_5_1_interpretation:
           enabled: true
-          description: "Interpret cluster characteristics"
-          output: "5.1.knowledge_extraction.cluster_interpretation.json"
-          # Expected: {cluster_id: {dominant_features, characteristics, size}}
+          description: "Profile and interpret dominant threat patterns per cluster"
+          methods:
+            cluster_interpretation:
+              techniques:
+                kmeans_n2_profiling:
+                  enabled: true
+                  params:
+                    source: "4.5.model_evaluation.profiling.kmeans_n2.json"
+                    top_features: 10
+                    feature_names_source: "3.5.data_formatting.f_final_schema_report.json"
+                  output: "5.1.interpretation.kmeans_n2_profiles.json"
+                kmeans_n3_profiling:
+                  enabled: true
+                  params:
+                    source: "4.5.model_evaluation.profiling.kmeans_n3.json"
+                    top_features: 10
+                    feature_names_source: "3.5.data_formatting.f_final_schema_report.json"
+                  output: "5.1.interpretation.kmeans_n3_profiles.json"
+          output_artifacts:
+            threat_knowledge_base: "5.1.interpretation.final_cluster_rules.json"
 
-        # ──────────────────────────────────────────────────────────────────────
-        # STEP 5.2: BUSINESS RESULTS EVALUATION
-        # ──────────────────────────────────────────────────────────────────────
         step_5_2_business_evaluation:
           enabled: true
-          description: "Validate clustering aligns with business goals"
-          # QUESTION: ¿Comparar clusters con IncidentGrade distribution?
-          output: "5.2.business_evaluation.cluster_vs_target.png"
-          # Expected: Crosstab cluster_id vs IncidentGrade
+          description: "Confusion matrices and cluster vs IncidentGrade alignment"
+          methods:
+            business_alignment:
+              techniques:
+                kmeans_n2_confusion_matrix:
+                  enabled: true
+                  params:
+                    cluster_source: "kmeans_n2"
+                    target_column: "label"
+                    normalize: "pred"
+                  output: "5.2.business_evaluation.confusion_matrix.kmeans_n2.json"
+                kmeans_n3_confusion_matrix:
+                  enabled: true
+                  params:
+                    cluster_source: "kmeans_n3"
+                    target_column: "label"
+                    normalize: "pred"
+                  output: "5.2.business_evaluation.confusion_matrix.kmeans_n3.json"
+                dbscan_confusion_matrix:
+                  enabled: true
+                  params:
+                    cluster_source: "dbscan"
+                    target_column: "label"
+                    normalize: "pred"
+                    collapse_top_n: 5
+                  output: "5.2.business_evaluation.confusion_matrix.dbscan_collapsed.json"
+                crosstab_distribution:
+                  enabled: true
+                  params:
+                    plot_type: "stacked_bar"
+                    targets: [ "kmeans_n2", "kmeans_n3" ]
+                  output: "5.2.business_evaluation.alignment_chart.png"
+          output_artifacts:
+            confusion_matrices: "5.2.business_evaluation.soc_confusion_matrices.json"
+            alignment_plot: "5.2.business_evaluation.cluster_vs_target.png"
 
-        # ──────────────────────────────────────────────────────────────────────
-        # STEP 5.3: PROCESS AUDIT
-        # ──────────────────────────────────────────────────────────────────────
         step_5_3_process_audit:
           enabled: true
-          description: "Review pipeline reproducibility"
-          output: "5.3.process_audit.reproducibility_check.json"
-          # Expected: {seed_used, config_hash, artifacts_list}
+          description: "Audit reproducibility, leakage risks and data lineage"
+          methods:
+            reproducibility_audit:
+              techniques:
+                leakage_sanity_check:
+                  enabled: true
+                  params:
+                    checked_features: [ "SuspicionLevel", "LastVerdict" ]
+                    leakage_risk: "suspect"
+                  output: "5.3.process_audit.leakage_results.json"
+                reproducibility_check:
+                  enabled: true
+                  params:
+                    target_seed: 7
+                    artifacts_to_verify:
+                      - "3.5.data_formatting.a_train_prepared.parquet"
+                      - "4.3.model_training.best_model.pkl"
+                      - "4.5.model_evaluation.summary.json"
+                  output: "5.3.process_audit.seed_validation.json"
+          output_artifacts:
+            reproducibility_certificate: "5.3.process_audit.reproducibility_report.json"
 
-        # ──────────────────────────────────────────────────────────────────────
-        # STEP 5.4: DECISION MAKING
-        # ──────────────────────────────────────────────────────────────────────
         step_5_4_decision_making:
           enabled: true
-          description: "Next steps and recommendations"
-          # QUESTION: ¿Usar clusters como features para classification?
-          output: "5.4.decision_making.recommendations.json"
-          # Expected: {next_steps: [], deployment_ready: bool}
+          description: "Deployment readiness assessment and recommendations"
+          methods:
+            downstream_strategy:
+              techniques:
+                evaluate_deployment_readiness:
+                  enabled: true
+                  params:
+                    min_ari_threshold: 0.05
+                    winning_model_criteria: "ari_score"
+                    document_limitations: true
+                    test_set_status: "reserved — not used in unsupervised clustering phase"
+                  output: "5.4.decision_making.readiness_metrics.json"
+                recommendations:
+                  enabled: true
+                  params:
+                    include_deployment_considerations: true
+                    include_monitoring_suggestions: true
+                  output: "5.4.decision_making.recommendations.json"
+          output_artifacts:
+            deployment_readiness: "5.4.decision_making.readiness_metrics.json"
+            recommendations: "5.4.decision_making.recommendations.json"
