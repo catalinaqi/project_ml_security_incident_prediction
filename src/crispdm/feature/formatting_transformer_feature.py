@@ -304,7 +304,8 @@ def save_auxiliary_labels(
         labels_train["label"] = labels_train["label"].fillna(-1).astype(int)
     else:
         labels_train["label"] = labels_train["label"].astype(int)
-    labels_train = labels_train[["label"]]
+    #labels_train = labels_train[["label"]]
+    # Al no filtrar, labels_train mantiene tanto [column] (IncidentGrade) como 'label'
 
     labels_test = None
     if df_test is not None and column in df_test.columns:
@@ -317,7 +318,8 @@ def save_auxiliary_labels(
             labels_test["label"] = labels_test["label"].fillna(-1).astype(int)
         else:
             labels_test["label"] = labels_test["label"].astype(int)
-        labels_test = labels_test[["label"]]
+        # Mantiene ambas columnas para consistencia con el set de entrenamiento
+        #labels_test = labels_test[["label"]]
     elif df_test is not None:
         log.warning("[save_auxiliary_labels] column '%s' not in test – returning None for test", column)
 

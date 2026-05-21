@@ -198,7 +198,6 @@ def main():
             logger.info(f"Train data after Phase 4.3: {len(ctx.df_train):,} rows x"
                         f" {len(ctx.df_train.columns)} cols")
 
-        # ────────────────────────────────────────────────────
         # ── Phase 4.4 ────────────────────────────────────────────────────
         logger.info("\n" + "-" * 70)
         logger.info("Step 4.3: data_transformation")
@@ -208,20 +207,20 @@ def main():
             logger.info(f"Train data after Phase 4.3: {len(ctx.df_train):,} rows x"
                         f" {len(ctx.df_train.columns)} cols")
 
-        # ────────────────────────────────────────────────────
         # ── Phase 4.5 ────────────────────────────────────────────────────
         logger.info("\n" + "-" * 70)
-        logger.info("Step 4.3: data_transformation")
+        logger.info("Step 4.5: Model Evaluation")
         logger.info("-" * 70)
         ctx = run_phase4_5(ctx)
         if ctx.df_train is not None:
-            logger.info(f"Train data after Phase 4.3: {len(ctx.df_train):,} rows x"
+            logger.info(f"Train data after Phase 4.5: {len(ctx.df_train):,} rows x"
                         f" {len(ctx.df_train.columns)} cols")
 
         # ────────────────────────────────────────────────────
         logger.info("\n" + "=" * 70)
         logger.info("PIPELINE EXECUTED SUCCESSFULLY (Phase 2 + Phase 3.1 + Phase 3.2 "
-                    "+ Phase 3.3 + Phase 3.5 + 4.1 + 4.2 + 4.3)")
+                    "+ Phase 3.3 + Phase 3.5 + Phase 4.1 + Phase 4.2 + Phase 4.3 "
+                    "+ Phase 4.4 + Phase 4.5)")
         logger.info("=" * 70)
         logger.info(f"Run directory: {ctx.run_dir}")
 

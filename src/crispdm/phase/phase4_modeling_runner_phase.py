@@ -377,6 +377,8 @@ def run_step_4_3(ctx: RunContext) -> RunContext:
 
     tune_technique: dict[str, Any] = methods_cfg.get("techniques", {}).get("hyperparameter_tuning", {})
     tune_params: dict[str, Any] = tune_technique.get("params", {})  # strategy, scoring, grids, ...
+    # Extraemos el nuevo parámetro
+    max_training_rows = fit_params.get("max_training_rows")
 
     log.debug("[4.3] tune_params keys: %s", list(tune_params.keys()))
     log.debug("[4.3] fit_params: %s", fit_params)
@@ -392,16 +394,55 @@ def run_step_4_3(ctx: RunContext) -> RunContext:
         return ctx
 
     # ------------------------------------------------------------------
-    # Call the pure training function (pass tune_params)
+    # NEW: Extraction and Validation of Stratification Vector (SOC Ratios)
     # ------------------------------------------------------------------
+    stratify_labels: np.ndarray | None = None
+    sample_method = tune_params.get("sample_method", "random")
+
+    if sample_method == "stratified":
+        log.info("[4.3] 'stratified' sample_method detected. Resolving auxiliary labels for SOC balance.")
+
+        # Intentar extraer del contexto original si fluye aguas arriba
+        df_gt_source = ctx.df_train if hasattr(ctx, "df_train") and ctx.df_train is not None else None
+
+        # Enfoque defensivo secundario: si df_train no contiene la columna 'label', leer de disco
+        if df_gt_source is not None and "label" in df_gt_source.columns:
+            stratify_labels = df_gt_source["label"].to_numpy()
+            log.info("[4.3] Stratification vector successfully extracted from memory Context.")
+        else:
+            # Reutilizamos la función resolutora existente o la ruta estandarizada por CRISP-DM
+            phase3_dir = ctx.run_dir / PhaseDir.PHASE3.value
+            gt_filename = "3.5.dataset_formatting.save_auxiliary_labels.c_incident_grade_labels_train.parquet"
+            gt_path = phase3_dir / gt_filename
+
+            if gt_path.exists():
+                df_gt = pd.read_parquet(gt_path)
+                if "label" in df_gt.columns:
+                    stratify_labels = df_gt["label"].to_numpy()
+                    log.info("[4.3] Stratification vector successfully loaded from disk: %s", gt_filename)
+                else:
+                    log.warning("[4.3] 'label' column missing in auxiliary Parquet file. Falling back.")
+            else:
+                log.warning("[4.3] Auxiliary labels Parquet not found at %s. Grid search may skip stratification.", gt_path)
+
+        # Validación crítica de consistencia dimensional antes de entrar a la grilla
+        if stratify_labels is not None and len(stratify_labels) != X_train.shape[0]:
+            error_dim = f"[4.3] Dimension mismatch: X_train has {X_train.shape[0]} rows but stratify_labels has {len(stratify_labels)} elements."
+            log.error(error_dim)
+            raise RuntimeError(error_dim)
 
 
+    # ------------------------------------------------------------------
+    # Call the pure training function (pass tune_params and stratify_labels)
+    # ------------------------------------------------------------------
     try:
         training_result = train_clustering_models(
             X_train=X_train,
             tuning_cfg=tune_params,       # Now contains 'grids'
             fit_cfg=fit_params,           # now contains 'fit_best_only'
             problem_type="clustering",
+            stratify_labels=stratify_labels,  #  Inyectado de forma limpia
+            max_training_rows=max_training_rows,
         )
     except ValueError as e:
         log.error("[4.3] train_clustering_models failed: %s", e)
@@ -460,6 +501,7 @@ def run_step_4_3(ctx: RunContext) -> RunContext:
             "scoring": metadata.get("scoring"),
             "grid_search_sample_size": metadata.get("grid_search_sample_size"),
             "refit": metadata.get("refit"),
+            "sample_method": metadata.get("sample_method"),  # Almacenar trazabilidad en metadatos
         }
         save_json(hp_summary, phase4_dir / hp_summary_path)
         log.info("[4.3] saved hp search summary to %s", hp_summary_path)
@@ -544,6 +586,7 @@ def run_step_4_3(ctx: RunContext) -> RunContext:
             "algorithms": list(best_models.keys()),
             "refit": metadata.get("refit"),
             "scoring": metadata.get("scoring"),
+            "sample_method": metadata.get("sample_method"),
         },
     )
 
@@ -691,7 +734,7 @@ def run_step_4_5(ctx: RunContext) -> RunContext:
     # ------------------------------------------------------------------
     # Extract global random seed (inherited from base_pipeline_config)
     # ------------------------------------------------------------------
-    global_seed = dget(ctx.config.runtime, "random_seed", 42)
+    global_seed = dget(ctx.config.runtime, "random_seed", 7)
     log.debug("[4.5] global random_seed=%d", global_seed)
 
     # ------------------------------------------------------------------

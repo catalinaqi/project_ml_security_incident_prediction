@@ -649,6 +649,7 @@ clustering_pipeline_config:
                   params:
                     fit_best_only: true
                     store_all_models: false
+                    max_training_rows: 30000 # add
                   output: "4.3.model_training.fit.pkl"
                 hyperparameter_tuning:
                   enabled: true
@@ -658,20 +659,21 @@ clustering_pipeline_config:
                     refit: true
 
                     # NUEVO — subsample solo para grid search, fit final sobre datos completos
-                    grid_search_sample_size: 30000
+                    grid_search_sample_size: 15000  # Bajalo de 30k a 15k
+                    metrics_sample_size: 5000       # Bajalo de 10k a 5k
                     random_state: 7
 
                     grids:
                       kmeans:
-                        n_clusters: [2, 3, 4]
+                        n_clusters: [2, 3, 4, 5]
                         init: ["k-means++"]
                         max_iter: [300]
                         random_state: [7]
                         output: "4.3.model_training.hyperparameter_tuning.kmeans.json"
 
                       dbscan:
-                        eps: [0.05, 0.10, 0.27] # p50, p75, p90, p95, p99
-                        min_samples: [5, 10]  # TODO: [3, 5, 10]
+                        eps: [0.1, 0.2, 0.3, 0.5] # p50, p75, p90, p95, p99
+                        min_samples: [10, 25, 50]  # TODO: [3, 5, 10]
                         metric: ["euclidean"]
                         output: "4.3.model_training.hyperparameter_tuning.dbscan.json"
           output_artifacts:
@@ -812,7 +814,7 @@ clustering_pipeline_config:
         step_5_1_interpretation:
           enabled: true
           description: "Interpret cluster characteristics"
-          # OUTPUT: 5.1.knowledge_extraction.cluster_interpretation.json
+          output: "5.1.knowledge_extraction.cluster_interpretation.json"
           # Expected: {cluster_id: {dominant_features, characteristics, size}}
 
         # ──────────────────────────────────────────────────────────────────────
@@ -822,7 +824,7 @@ clustering_pipeline_config:
           enabled: true
           description: "Validate clustering aligns with business goals"
           # QUESTION: ¿Comparar clusters con IncidentGrade distribution?
-          # OUTPUT: 5.2.business_evaluation.cluster_vs_target.png
+          output: "5.2.business_evaluation.cluster_vs_target.png"
           # Expected: Crosstab cluster_id vs IncidentGrade
 
         # ──────────────────────────────────────────────────────────────────────
@@ -831,7 +833,7 @@ clustering_pipeline_config:
         step_5_3_process_audit:
           enabled: true
           description: "Review pipeline reproducibility"
-          # OUTPUT: 5.3.process_audit.reproducibility_check.json
+          output: "5.3.process_audit.reproducibility_check.json"
           # Expected: {seed_used, config_hash, artifacts_list}
 
         # ──────────────────────────────────────────────────────────────────────
@@ -841,5 +843,5 @@ clustering_pipeline_config:
           enabled: true
           description: "Next steps and recommendations"
           # QUESTION: ¿Usar clusters como features para classification?
-          # OUTPUT: 5.4.decision_making.recommendations.json
+          output: "5.4.decision_making.recommendations.json"
           # Expected: {next_steps: [], deployment_ready: bool}
