@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from omegaconf import DictConfig, OmegaConf
 
-from src.crispdm.common.logging_adapter_common import get_logger
-from src.crispdm.configuration.yml_repository_config import YmlRepository
-from src.crispdm.configuration.pipeline_task_dto_config import PipelineConfig
+from crispdm.common.logging_adapter_common import get_logger
+from crispdm.configuration.yml_repository_config import YmlRepository
+from crispdm.configuration.pipeline_task_dto_config import PipelineConfig
 
 log = get_logger(__name__)
 

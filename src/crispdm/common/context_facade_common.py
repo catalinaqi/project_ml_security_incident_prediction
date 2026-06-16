@@ -38,9 +38,9 @@ from omegaconf import DictConfig
 # =============================================================================
 # SECTION 3 – Internal imports
 # =============================================================================
-from src.crispdm.common.logging_adapter_common import get_logger
-from src.crispdm.common.path_service_common import find_project_root, resolve_path
-from src.crispdm.configuration.enum_registry_config import PhaseDir
+from crispdm.common.logging_adapter_common import get_logger
+from crispdm.common.path_service_common import find_project_root, resolve_path
+from crispdm.configuration.enum_registry_config import PhaseDir
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 4 — Level logger
 # ──────────────────────────────────────────────────────────────────────────────

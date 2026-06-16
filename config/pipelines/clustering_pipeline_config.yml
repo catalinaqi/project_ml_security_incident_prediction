@@ -367,6 +367,13 @@ clustering_pipeline_config:
                       LastVerdict: [ "Unknown", "Clean", "Suspicious", "Malicious" ]
                     leakage_risk: "high"      # confirmado suspect_leakage fase 2
                   output: "3.3.encoding.ordinal_encoding.mappings.json"
+                one_hot_encoding: # req: elegir otra tecnica div
+                  enabled: true
+                  params:
+                target_encoding:
+                  enabled: false
+                frequency_encoding:
+                  enabled: false
 
             # 6. Column dropping — post-aggregation y sin señal
             column_dropping:

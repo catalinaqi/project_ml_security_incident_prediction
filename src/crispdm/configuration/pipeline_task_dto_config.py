@@ -2,8 +2,8 @@ from __future__ import annotations
 from typing import Optional, Dict, List, Any, Union
 from pydantic import BaseModel, Field, field_validator
 
-from src.crispdm.common.logging_adapter_common import get_logger
-from src.crispdm.configuration.enum_registry_config import PhaseDir, StepsPhase
+from crispdm.common.logging_adapter_common import get_logger
+from crispdm.configuration.enum_registry_config import PhaseDir, StepsPhase
 
 log = get_logger(__name__)
 

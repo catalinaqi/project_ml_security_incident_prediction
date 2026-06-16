@@ -9,4 +9,4 @@
 #   - prod: Full-scale execution with larger samples (200k rows)
 # =========================================================================
 
-active_profile: "prod"  # Options: "dev", "prod"
+active_profile: "dev"  # Options: "dev", "prod"

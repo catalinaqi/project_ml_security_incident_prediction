@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Optional
 from omegaconf import OmegaConf, DictConfig
 
-from src.crispdm.common.logging_adapter_common import get_logger
-from src.crispdm.common.path_service_common import resolve_path, find_project_root
+from crispdm.common.logging_adapter_common import get_logger
+from crispdm.common.path_service_common import resolve_path, find_project_root
 
 log = get_logger(__name__)
 
